@@ -14,6 +14,7 @@
 
 static int g_kfd = -1;
 static int g_mfd = -1;
+static int g_ev0 = -1;
 static pthread_mutex_t g_emit_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int emit(int fd, int type, int code, int val) {
@@ -40,7 +41,7 @@ static const char *key_name(int key) {
         case KEY_DOWN: return "KEY_DOWN";
         case KEY_LEFT: return "KEY_LEFT";
         case KEY_RIGHT: return "KEY_RIGHT";
-        case KEY_ENTER: return "KEY_ENTER (OK)";
+        case KEY_ENTER: return "KEY_ENTER";
         case KEY_BACK: return "KEY_BACK";
         case KEY_HOME: return "KEY_HOME";
         case KEY_MENU: return "KEY_MENU";
@@ -62,7 +63,7 @@ static int map_lg_scancode(int scan) {
         case 0xbe: return KEY_DOWN;       // Down (raw 0x41)
         case 0xf8: return KEY_LEFT;       // Left (raw 0x07)
         case 0xf9: return KEY_RIGHT;      // Right (raw 0x06)
-        case 0xbb: return KEY_ENTER;      // OK (raw 0x44)
+        case 0xbb: return KEY_ENTER;      // OK / Enter (raw 0x44)
         case 0xd7: return KEY_BACK;       // Back (raw 0x28)
         case 0xa4: return KEY_BACK;       // Exit (raw 0x5b)
         case 0x83: return KEY_HOME;       // Home (raw 0x7c)
@@ -96,7 +97,6 @@ static int map_lg_scancode(int scan) {
         case 0xe6: return KEY_9;
         case 0xe5: return KEY_0;
         default:
-            // Check raw if driver passed un-inverted value
             if (raw == 0x40) return KEY_UP;
             if (raw == 0x41) return KEY_DOWN;
             if (raw == 0x07) return KEY_LEFT;
@@ -124,35 +124,29 @@ static void *ir_worker_thread(void *arg) {
     }
     lseek(fd, 0, SEEK_END);
 
-    struct pollfd pfd;
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+    // Monitor both /dev/kmsg and the grabbed /dev/input/event0
+    struct pollfd pfds[2];
+    pfds[0].fd = fd;
+    pfds[0].events = POLLIN;
+    pfds[1].fd = g_ev0;
+    pfds[1].events = (g_ev0 >= 0) ? POLLIN : 0;
 
-    int is_lg = 1; // Default to 1 so LG remotes work right away
-    int held_key = 0;
-    uint64_t held_key_last_rx_ms = 0;
-
+    int is_lg = 1;
     char buf[1024];
 
-    printf("Nexus IR Worker thread started, listening for LG TV remote...\n");
+    printf("Nexus IR Worker started (LG TV Remote + event0 EVIOCGRAB active)\n");
     fflush(stdout);
 
     while (1) {
-        int ret = poll(&pfd, 1, 40);
-        uint64_t now = get_now_ms();
+        int ret = poll(pfds, 2, 100);
 
-        // Release held key (e.g. OK) if no repeat arrived for 320ms
-        if (held_key > 0 && (now - held_key_last_rx_ms > 320)) {
-            pthread_mutex_lock(&g_emit_mutex);
-            emit(g_kfd, EV_KEY, held_key, 0);
-            emit(g_kfd, EV_SYN, SYN_REPORT, 0);
-            pthread_mutex_unlock(&g_emit_mutex);
-            printf(">>> [IR] Key RELEASE: %s (%d)\n", key_name(held_key), held_key);
-            fflush(stdout);
-            held_key = 0;
+        // Drain grabbed event0 to prevent buffer accumulation
+        if (ret > 0 && g_ev0 >= 0 && (pfds[1].revents & POLLIN)) {
+            struct input_event dummy[8];
+            while (read(g_ev0, dummy, sizeof(dummy)) > 0) {}
         }
 
-        if (ret > 0 && (pfd.revents & POLLIN)) {
+        if (ret > 0 && (pfds[0].revents & POLLIN)) {
             while (1) {
                 ssize_t n = read(fd, buf, sizeof(buf) - 1);
                 if (n <= 0) break;
@@ -176,43 +170,20 @@ static void *ir_worker_thread(void *arg) {
                     unsigned int scancode = 0;
                     if (sscanf(gd + 12, "%x", &scancode) == 1) {
                         int key = map_lg_scancode(scancode);
-                        now = get_now_ms();
 
                         if (key > 0) {
                             printf(">>> [IR] Key: %s (%d), scancode: 0x%02x\n",
                                    key_name(key), key, scancode);
                             fflush(stdout);
 
-                            if (key == KEY_ENTER) {
-                                // OK button supports long-press hold
-                                if (held_key == 0) {
-                                    pthread_mutex_lock(&g_emit_mutex);
-                                    emit(g_kfd, EV_KEY, KEY_ENTER, 1);
-                                    emit(g_kfd, EV_SYN, SYN_REPORT, 0);
-                                    pthread_mutex_unlock(&g_emit_mutex);
-                                    held_key = KEY_ENTER;
-                                    printf(">>> [IR] OK DOWN\n");
-                                    fflush(stdout);
-                                }
-                                held_key_last_rx_ms = now;
-                            } else {
-                                // If OK was held, release it before emitting another key
-                                if (held_key > 0) {
-                                    pthread_mutex_lock(&g_emit_mutex);
-                                    emit(g_kfd, EV_KEY, held_key, 0);
-                                    emit(g_kfd, EV_SYN, SYN_REPORT, 0);
-                                    pthread_mutex_unlock(&g_emit_mutex);
-                                    held_key = 0;
-                                }
-                                // Navigation and other action keys: crisp tap
-                                pthread_mutex_lock(&g_emit_mutex);
-                                emit(g_kfd, EV_KEY, key, 1);
-                                emit(g_kfd, EV_SYN, SYN_REPORT, 0);
-                                usleep(25000); // 25ms
-                                emit(g_kfd, EV_KEY, key, 0);
-                                emit(g_kfd, EV_SYN, SYN_REPORT, 0);
-                                pthread_mutex_unlock(&g_emit_mutex);
-                            }
+                            // Emit clean keyboard press & release (instant tap)
+                            pthread_mutex_lock(&g_emit_mutex);
+                            emit(g_kfd, EV_KEY, key, 1);
+                            emit(g_kfd, EV_SYN, SYN_REPORT, 0);
+                            usleep(25000); // 25ms
+                            emit(g_kfd, EV_KEY, key, 0);
+                            emit(g_kfd, EV_SYN, SYN_REPORT, 0);
+                            pthread_mutex_unlock(&g_emit_mutex);
                         }
                     }
                 }
@@ -224,6 +195,18 @@ static void *ir_worker_thread(void *arg) {
 }
 
 int main(int argc, char **argv) {
+    // 0. Grab /dev/input/event0 (110b0030.pwm) with EVIOCGRAB
+    // This stops the kernel's default keytable from misinterpreting LG scancodes
+    // (e.g. 0xbf -> KEY_POWER turning off TV Box, 0xbe -> KEY_MUTE muting audio)
+    g_ev0 = open("/dev/input/event0", O_RDONLY | O_NONBLOCK);
+    if (g_ev0 >= 0) {
+        if (ioctl(g_ev0, EVIOCGRAB, 1) == 0) {
+            printf("Successfully grabbed /dev/input/event0 (suppressed erroneous kernel Power/Mute)\n");
+        } else {
+            perror("ioctl EVIOCGRAB event0");
+        }
+    }
+
     // 1. Pure Keyboard Device: "Nexus Virtual Remote" (vendor: 0x1234, product: 0x5678)
     g_kfd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (g_kfd < 0) {
@@ -390,6 +373,10 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (g_ev0 >= 0) {
+        ioctl(g_ev0, EVIOCGRAB, 0);
+        close(g_ev0);
+    }
     ioctl(g_kfd, UI_DEV_DESTROY);
     close(g_kfd);
     if (g_mfd >= 0) {
