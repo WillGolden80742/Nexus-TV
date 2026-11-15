@@ -233,9 +233,9 @@ final class Prefs {
 
     static void setHideAnimation(boolean hide) { put("hideAnimation", hide); }
 
-    /** "stremio" or "unitv". Default is "stremio". */
+    /** "stremio" or "unitv". Default is "unitv". */
     static String moviePlayer() {
-        return sp().getString("moviePlayer", "stremio");
+        return sp().getString("moviePlayer", "unitv");
     }
 
     static void setMoviePlayer(String p) {

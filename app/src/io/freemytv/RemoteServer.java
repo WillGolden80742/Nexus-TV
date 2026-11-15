@@ -354,12 +354,26 @@ public final class RemoteServer {
                         return;
                     }
                 } catch (Throwable t) {
+                    AppLog.w("runAdbCommand error: " + android.util.Log.getStackTraceString(t));
                     try {
                         Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
                     } catch (Throwable ignored) {}
                 }
             }
         });
+    }
+
+    public static void searchUniTv(String title) {
+        String cleanTitle = "";
+        if (title != null) {
+            cleanTitle = java.text.Normalizer.normalize(title, java.text.Normalizer.Form.NFD)
+                    .replaceAll("[^\\p{ASCII}]", "")
+                    .replaceAll("[^a-zA-Z0-9\\s_\\.-]", "")
+                    .trim();
+        }
+        final String finalTitle = cleanTitle;
+        if (finalTitle.isEmpty()) return;
+        sendUdpCommand("S " + finalTitle);
     }
 
     public static void ensureVirtualMouseDaemon() {
@@ -405,6 +419,20 @@ public final class RemoteServer {
                            + "mkdir -p /data/system/devices/keylayout 2>/dev/null; "
                            + "cp " + klPath + " /data/system/devices/keylayout/Vendor_1234_Product_5678.kl 2>/dev/null; "
                            + "chmod 644 /data/system/devices/keylayout/Vendor_1234_Product_5678.kl 2>/dev/null";
+                runAdbCommand(cmd);
+            } catch (Throwable ignored) {}
+
+            try {
+                File scTmp = new File(appContext.getCacheDir(), "unitv_search.sh");
+                try (InputStream in = appContext.getAssets().open("unitv_search.sh");
+                     FileOutputStream out = new FileOutputStream(scTmp)) {
+                    byte[] buf = new byte[4096];
+                    int r;
+                    while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+                }
+                String scPath = scTmp.getAbsolutePath();
+                String cmd = "cp " + scPath + " /data/local/tmp/unitv_search.sh 2>/dev/null; "
+                           + "chmod 755 /data/local/tmp/unitv_search.sh 2>/dev/null";
                 runAdbCommand(cmd);
             } catch (Throwable ignored) {}
 

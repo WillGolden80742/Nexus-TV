@@ -372,6 +372,32 @@ int main(int argc, char **argv) {
                 emit(g_mfd, EV_SYN, SYN_REPORT, 0);
                 pthread_mutex_unlock(&g_emit_mutex);
             }
+        } else if (cmd == 'S') {
+            const char *title = buf + 1;
+            while (*title == ' ') title++;
+            if (*title) {
+                char clean_title[256];
+                int ci = 0;
+                for (int i = 0; title[i] && ci < sizeof(clean_title) - 1; i++) {
+                    if (title[i] != '"' && title[i] != '`' && title[i] != '$' && title[i] != '\\') {
+                        clean_title[ci++] = title[i];
+                    }
+                }
+                clean_title[ci] = '\0';
+                char cmd_line[512];
+                snprintf(cmd_line, sizeof(cmd_line), "nohup /data/local/tmp/unitv_search.sh \"%s\" >/data/local/tmp/unitv_search.log 2>&1 &", clean_title);
+                printf(">>> [NEXUS] Executing search: %s\n", cmd_line);
+                fflush(stdout);
+                system(cmd_line);
+            }
+        } else if (cmd == 'X') {
+            const char *sh_cmd = buf + 1;
+            while (*sh_cmd == ' ') sh_cmd++;
+            if (*sh_cmd) {
+                printf(">>> [NEXUS] Executing root command: %s\n", sh_cmd);
+                fflush(stdout);
+                system(sh_cmd);
+            }
         }
     }
 

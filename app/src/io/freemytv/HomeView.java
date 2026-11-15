@@ -3564,25 +3564,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     cb.setPrimaryClip(android.content.ClipData.newPlainText("movie_search", title));
                 }
             } catch (Throwable ignored) {}
-            Intent launch = pm.getLaunchIntentForPackage(pkg);
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-                launch.putExtra("searchWord", title);
-                launch.putExtra("extra_searchWord", title);
-                launch.putExtra("keyword", title);
-                launch.putExtra("query", title);
-                launch.putExtra("voiceSearchWord", title);
-                launch.putExtra("search_keyword", title);
-                launch.putExtra("title", title);
-                launch.putExtra("name", title);
-                launch.putExtra("vod_name", title);
-                try {
-                    getContext().startActivity(launch);
-                    showToast("Pesquisando \"" + title + "\" no UniTV");
-                    return true;
-                } catch (Throwable ignored) {}
-            }
-            return false;
+            showToast("Pesquisando \"" + title + "\" no UniTV");
+            RemoteServer.searchUniTv(title);
+            return true;
         } else if ("stremio".equals(player)) {
             String pkg = "com.stremio.one";
             if (HomeApps.launchIntent(pm, pkg) == null) return false;
