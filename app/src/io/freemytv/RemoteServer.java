@@ -28,6 +28,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -98,8 +99,9 @@ public final class RemoteServer {
     private static final Set<OutputStream> wsClients = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private static final Map<String, byte[]> ICON_CACHE = new ConcurrentHashMap<>();
 
+    private static final Object UDP_LOCK = new Object();
     private static volatile DatagramSocket mouseUdpSocket;
-    private static volatile InetSocketAddress mouseUdpAddr;
+    private static volatile InetAddress loopbackAddr;
 
     private static String lastBroadcastTrack = "";
     private static String lastBroadcastArtist = "";
@@ -439,82 +441,56 @@ public final class RemoteServer {
         });
     }
 
-    public static void sendRealMouseRel(int dx, int dy) {
+    private static void sendUdpCommand(String cmd) {
         POOL.execute(() -> {
-            try {
-                if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
-                    mouseUdpSocket = new DatagramSocket();
-                    mouseUdpAddr = new InetSocketAddress("127.0.0.1", 8766);
+            synchronized (UDP_LOCK) {
+                try {
+                    if (loopbackAddr == null) {
+                        try {
+                            loopbackAddr = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+                        } catch (Throwable e) {
+                            loopbackAddr = InetAddress.getLoopbackAddress();
+                        }
+                    }
+                    if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
+                        mouseUdpSocket = new DatagramSocket(new InetSocketAddress(loopbackAddr, 0));
+                    }
+                    byte[] data = cmd.getBytes(StandardCharsets.US_ASCII);
+                    DatagramPacket packet = new DatagramPacket(data, data.length, loopbackAddr, 8766);
+                    mouseUdpSocket.send(packet);
+                } catch (Throwable t) {
+                    AppLog.w("sendUdpCommand FAIL: " + cmd + " -> " + t.getMessage());
+                    try {
+                        if (mouseUdpSocket != null) mouseUdpSocket.close();
+                    } catch (Throwable ignored) {}
+                    mouseUdpSocket = null;
                 }
-                byte[] data = ("M " + dx + " " + dy).getBytes(StandardCharsets.US_ASCII);
-                mouseUdpSocket.send(new DatagramPacket(data, data.length, mouseUdpAddr));
-            } catch (Throwable ignored) {}
+            }
         });
+    }
+
+    public static void sendRealMouseRel(int dx, int dy) {
+        sendUdpCommand("M " + dx + " " + dy);
     }
 
     public static void sendRealScroll(int wheel) {
-        POOL.execute(() -> {
-            try {
-                if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
-                    mouseUdpSocket = new DatagramSocket();
-                    mouseUdpAddr = new InetSocketAddress("127.0.0.1", 8766);
-                }
-                byte[] data = ("W " + wheel).getBytes(StandardCharsets.US_ASCII);
-                mouseUdpSocket.send(new DatagramPacket(data, data.length, mouseUdpAddr));
-            } catch (Throwable ignored) {}
-        });
+        sendUdpCommand("W " + wheel);
     }
 
     public static void sendRealMouseClick() {
-        POOL.execute(() -> {
-            try {
-                if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
-                    mouseUdpSocket = new DatagramSocket();
-                    mouseUdpAddr = new InetSocketAddress("127.0.0.1", 8766);
-                }
-                byte[] data = "C".getBytes(StandardCharsets.US_ASCII);
-                mouseUdpSocket.send(new DatagramPacket(data, data.length, mouseUdpAddr));
-            } catch (Throwable ignored) {}
-        });
+        sendUdpCommand("C");
     }
 
     public static void sendRealKey(int linuxKey) {
-        POOL.execute(() -> {
-            try {
-                if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
-                    mouseUdpSocket = new DatagramSocket();
-                    mouseUdpAddr = new InetSocketAddress("127.0.0.1", 8766);
-                }
-                byte[] data = ("K " + linuxKey).getBytes(StandardCharsets.US_ASCII);
-                mouseUdpSocket.send(new DatagramPacket(data, data.length, mouseUdpAddr));
-            } catch (Throwable ignored) {}
-        });
+        sendUdpCommand("K " + linuxKey);
     }
 
     public static void sendRealKeyDown(int linuxKey) {
-        POOL.execute(() -> {
-            try {
-                if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
-                    mouseUdpSocket = new DatagramSocket();
-                    mouseUdpAddr = new InetSocketAddress("127.0.0.1", 8766);
-                }
-                byte[] data = ("D " + linuxKey).getBytes(StandardCharsets.US_ASCII);
-                mouseUdpSocket.send(new DatagramPacket(data, data.length, mouseUdpAddr));
-            } catch (Throwable ignored) {}
-        });
+        sendUdpCommand("D " + linuxKey);
     }
 
     public static void sendRealKeyUp(int linuxKey) {
-        POOL.execute(() -> {
-            try {
-                if (mouseUdpSocket == null || mouseUdpSocket.isClosed()) {
-                    mouseUdpSocket = new DatagramSocket();
-                    mouseUdpAddr = new InetSocketAddress("127.0.0.1", 8766);
-                }
-                byte[] data = ("U " + linuxKey).getBytes(StandardCharsets.US_ASCII);
-                mouseUdpSocket.send(new DatagramPacket(data, data.length, mouseUdpAddr));
-            } catch (Throwable ignored) {}
-        });
+        sendUdpCommand("U " + linuxKey);
     }
 
     public static void setInputListener(RemoteInputListener listener) {
@@ -636,13 +612,32 @@ public final class RemoteServer {
         }
     }
 
+    private static String readLineRaw(InputStream in) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b == '\n') break;
+            if (b != '\r') baos.write(b);
+        }
+        if (b == -1 && baos.size() == 0) return null;
+        return baos.toString("UTF-8");
+    }
+
+    private static void readFully(InputStream in, byte[] b, int off, int len) throws IOException {
+        int total = 0;
+        while (total < len) {
+            int r = in.read(b, off + total, len - total);
+            if (r < 0) throw new EOFException("EOF while reading socket");
+            total += r;
+        }
+    }
+
     private void handleClient(Socket socket) {
         try {
             InputStream in = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
-            String requestLine = reader.readLine();
+            String requestLine = readLineRaw(in);
             if (requestLine == null || requestLine.isEmpty()) {
                 socket.close();
                 return;
@@ -670,7 +665,7 @@ public final class RemoteServer {
             boolean isWebSocketUpgrade = false;
             String wsKey = "";
 
-            while ((line = reader.readLine()) != null && !line.isEmpty()) {
+            while ((line = readLineRaw(in)) != null && !line.isEmpty()) {
                 String lower = line.toLowerCase(Locale.ROOT);
                 if (lower.startsWith("content-length:")) {
                     try {
@@ -692,14 +687,9 @@ public final class RemoteServer {
 
             String body = "";
             if (contentLength > 0 && contentLength < 65536) {
-                char[] buf = new char[contentLength];
-                int total = 0;
-                while (total < contentLength) {
-                    int r = reader.read(buf, total, contentLength - total);
-                    if (r < 0) break;
-                    total += r;
-                }
-                body = new String(buf, 0, total);
+                byte[] buf = new byte[contentLength];
+                readFully(in, buf, 0, contentLength);
+                body = new String(buf, StandardCharsets.UTF_8);
             }
 
             route(method, path, query, authHeader, body, out);
@@ -733,8 +723,7 @@ public final class RemoteServer {
         try {
             byte[] header = new byte[2];
             while (running) {
-                int r = in.read(header);
-                if (r < 2) break;
+                readFully(in, header, 0, 2);
                 int b0 = header[0] & 0xFF;
                 int b1 = header[1] & 0xFF;
                 int opcode = b0 & 0x0F;
@@ -749,25 +738,20 @@ public final class RemoteServer {
                 long payloadLen = b1 & 0x7F;
                 if (payloadLen == 126) {
                     byte[] ext = new byte[2];
-                    in.read(ext);
+                    readFully(in, ext, 0, 2);
                     payloadLen = ((ext[0] & 0xFF) << 8) | (ext[1] & 0xFF);
                 } else if (payloadLen == 127) {
                     byte[] ext = new byte[8];
-                    in.read(ext);
+                    readFully(in, ext, 0, 8);
                     payloadLen = ByteBuffer.wrap(ext).getLong();
                 }
 
                 byte[] mask = new byte[4];
-                if (masked) in.read(mask);
+                if (masked) readFully(in, mask, 0, 4);
 
                 if (payloadLen > 1024 * 1024) break; // 1MB limit
                 byte[] payload = new byte[(int) payloadLen];
-                int total = 0;
-                while (total < payloadLen) {
-                    int count = in.read(payload, total, (int) payloadLen - total);
-                    if (count < 0) break;
-                    total += count;
-                }
+                readFully(in, payload, 0, (int) payloadLen);
 
                 if (masked) {
                     for (int i = 0; i < payload.length; i++) {
@@ -780,6 +764,10 @@ public final class RemoteServer {
                     handleWsMessage(text);
                 }
             }
+        } catch (EOFException ignored) {
+            // Normal client disconnect
+        } catch (Exception e) {
+            AppLog.w("WebSocket error: " + e.getMessage());
         } finally {
             wsClients.remove(out);
         }

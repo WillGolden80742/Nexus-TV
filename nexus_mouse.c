@@ -317,6 +317,8 @@ int main(int argc, char **argv) {
         buf[n] = '\0';
 
         char cmd = buf[0];
+        printf(">>> [UDP] received cmd=%c: %s\n", cmd, buf);
+        fflush(stdout);
         if (cmd == 'D') {
             int key = 0;
             if (sscanf(buf + 1, "%d", &key) == 1 && key > 0) {
