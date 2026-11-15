@@ -234,11 +234,15 @@ int main(int argc, char **argv) {
     ioctl(g_kfd, UI_SET_EVBIT, EV_KEY);
     ioctl(g_kfd, UI_SET_EVBIT, EV_SYN);
 
-    for (int k = 1; k < 512; k++) {
+    for (int k = 1; k < 248; k++) {
         ioctl(g_kfd, UI_SET_KEYBIT, k);
     }
     ioctl(g_kfd, UI_SET_KEYBIT, KEY_OK);
     ioctl(g_kfd, UI_SET_KEYBIT, KEY_SELECT);
+    ioctl(g_kfd, UI_SET_KEYBIT, 398); // KEY_RED
+    ioctl(g_kfd, UI_SET_KEYBIT, 399); // KEY_GREEN
+    ioctl(g_kfd, UI_SET_KEYBIT, 400); // KEY_YELLOW
+    ioctl(g_kfd, UI_SET_KEYBIT, 401); // KEY_BLUE
 
     struct uinput_user_dev kdev;
     memset(&kdev, 0, sizeof(kdev));
