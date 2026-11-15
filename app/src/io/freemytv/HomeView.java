@@ -1,8 +1,12 @@
 package io.freemytv;
 
+import java.util.Locale;
+
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
+import android.net.Uri;
 import android.bluetooth.BluetoothA2dp;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -23,10 +27,13 @@ import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.hardware.usb.UsbManager;
+import android.media.AudioManager;
 import android.media.tv.TvInputManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -110,17 +117,55 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final long TOAST_MS = 6000, FADE_MS = 800;
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
-    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8, RECENT = 9;
+    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8, RECENT = 9, NOTIF = 10;
     private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
-    // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
-    // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
-    private static final float L_TITLE_BASE = 130, L_TABBAR_TOP = 158, L_TABBAR_H = 68, L_CARDS_TOP = 262, L_CARD_H = 442;
-    private static final float WATCH_GAP = 40;
-    private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103;
-    private static final float L_STATUS = 25, L_STATUS_GAP = 22;
+    // Modern Android-style flat layout constants: optimized screen space
+    private static final float L_TITLE_BASE = 60, L_TABBAR_TOP = 40, L_TABBAR_H = 46;
+    private static final float L_PLATTER_TOP = 150, L_TILE_H = 145;
+    private static final float L_CARDS_TOP = 420, L_CARD_H = 460;
+    private static final float L_TALL_W = 440, L_CARD_GAP = 30, L_BUTTON = 50, L_BUTTON_GAP = 18, L_BUTTON_CY = 63;
+    private static final float WATCH_GAP = 30;
+    private static final float L_STATUS = 22, L_STATUS_GAP = 18;
     private static final String[] STATUS_SYMBOLS = {"wifi", "ethernet", "bluetooth", "usb"};
-    private static final float L_PLATTER_TOP = 814, L_TILE_H = 126;
+    private boolean musicActive;
+    private boolean musicPlaying;
+    private boolean musicDismissed;
+    private String lastDismissedTrack;
+    private long lastMusicAt;
+    private boolean notifOpen;
+    private int notifIndex = 0;
+    private final Spring notifSlide = new Spring(0.32f, 0.86f, 0);
+    private final RectF notifClearRect = new RectF();
+    private final RectF notifCloseRect = new RectF();
+    private final List<RectF> notifCardRects = new ArrayList<>();
+    private final RectF remoteModalCardRect = new RectF();
+    private final RectF remoteModalCloseRect = new RectF();
+    private boolean remoteModalOpen;
+    private final Spring remoteModalSlide = new Spring(0.32f, 0.82f, 0);
+    private Bitmap remoteQr;
+    private String remoteUrl;
+    private String remotePairCode;
+    private float remotePointerX = 640, remotePointerY = 360;
+    private boolean remotePointerVisible;
+    private long lastRemotePointerAt;
+    private boolean musicModalOpen;
+    private int musicModalIndex = 0;
+    private final RectF musicModalCloseRect = new RectF();
+    private final RectF musicModalSearchRect = new RectF();
+    private final RectF musicModalShuffleRect = new RectF();
+    private final RectF musicModalPrevRect = new RectF();
+    private final RectF musicModalPlayRect = new RectF();
+    private final RectF musicModalNextRect = new RectF();
+    private final RectF musicModalSpotifyBtnRect = new RectF();
+    private final List<RectF> musicModalTrackRects = new ArrayList<>();
+    private static final String[][] SPOTIFY_PLAYLIST = {
+        {"Marvin Gaye", "After The Dance", "4:48"},
+        {"The Dramatics", "Whatcha See Is Whatcha Get", "3:58"},
+        {"Bill Withers", "Just the Two of Us", "3:58"},
+        {"Michael Jackson", "Rock With You", "3:40"},
+        {"Al Green", "Let's Stay Together", "3:18"}
+    };
     private static final float L_DATE_BASE = 330, L_CLOCK_BASE = 540, L_WEATHER_BASE = 626, L_QUOTES_BASE = 694;
     private static final int L_INK = 0xFF1D1D1F, L_DIM = 0xFF6E6E73, L_FAINT = 0xFF8E8E93;
     private static String[] tabs;
@@ -158,7 +203,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         @Override public void hold(int id) { if (recentsOpen()) recents.closeFocused(); else if (sheetOpen) a11yHold(); else if (canReorder()) startReorder(); else showMenu(); }
     });
     private final RectF a11yRect = new RectF();
-    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, menuLayer, recentLayer;
+    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, menuLayer, notifLayer, recentLayer;
     private RecentApps recents;
     private int zone = Z_SHELF;
 
@@ -240,8 +285,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** Each app's tile like its Apple TV icon: brand colors (top, bottom) and logo (0 = as is, 1 = white, 2 = dark). */
     private static final Map<String, int[]> TILE_STYLE = new HashMap<>();
     static {
-        TILE_STYLE.put("netflix", new int[] {0xFF0A0A0A, 0xFF000000, 0});
-        TILE_STYLE.put("youtube", new int[] {0xFF1C1C1E, 0xFF09090A, 0});
+        TILE_STYLE.put("netflix", new int[] {0xFF181818, 0xFF0A0A0A, 0});
+        TILE_STYLE.put("youtube", new int[] {0xFF202022, 0xFF111113, 0});
+        TILE_STYLE.put("stremio", new int[] {0xFF241538, 0xFF130920, 0});
+        TILE_STYLE.put("unitv", new int[] {0xFFD35400, 0xFF962D00, 0});
+        TILE_STYLE.put("soltv", new int[] {0xFF0288D1, 0xFF01579B, 0});
+        TILE_STYLE.put("veloplay", new int[] {0xFF2E7D32, 0xFF1B5E20, 0});
+        TILE_STYLE.put("filemanager", new int[] {0xFF1565C0, 0xFF0D47A1, 0});
+        TILE_STYLE.put("sendfiles", new int[] {0xFF00838F, 0xFF006064, 0});
+        TILE_STYLE.put("aptoide", new int[] {0xFFF4511E, 0xFFBF360C, 0});
+        TILE_STYLE.put("spotify", new int[] {0xFF202023, 0xFF121214, 0});
         TILE_STYLE.put("globoplay", new int[] {0xFFFF8A1F, 0xFFFF2D5A, 1});
         TILE_STYLE.put("prime", new int[] {0xFF2AA8FF, 0xFF0A68D4, 1});
         TILE_STYLE.put("disney", new int[] {0xFF173584, 0xFF08143F, 0});
@@ -265,6 +318,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private int orderRevision, pendingOrderSaves;
     private int liftIndex = -1;
     private long reorderAt;
+    private long reorderDroppedAt = 0;
     private float wiggle;
     private Spring[] tileSlide = new Spring[0];
     private final Spring[] topSlide = new Spring[HomeApps.MAX_TOP];
@@ -402,7 +456,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // The layer may be shifted (bottom drawer): the glass reads the background from where it really is. The
             // drawer and the top buttons are always drawn as if resting in place (they are only visible there and are
             // not redrawn while they move).
-            scene.setOffset(0, kind == DRAWER || kind == STATUS ? 0 : getTranslationY());
+            scene.setOffset(0, kind == DRAWER || kind == STATUS || kind == NOTIF ? 0 : getTranslationY());
             shadows.dither = dark() > 0.5f;
             switch (kind) {
                 case SKY: drawSky(c); break;
@@ -413,6 +467,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 case DRAWER: drawDrawer(c); break;
                 case SHEET: drawSheet(c); break;
                 case MENU: drawMenu(c); break;
+                case NOTIF:
+                    if (remoteModalOpen || remoteModalSlide.value > 0.005f) {
+                        drawRemoteModal(c);
+                    } else if (musicModalOpen) {
+                        drawMusicModal(c);
+                    } else {
+                        drawNotifications(c);
+                    }
+                    break;
                 case RECENT: if (recents != null) recents.draw(c, w, h); break;
                 default: drawToast(c); break;
             }
@@ -632,22 +695,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         tiles = new Layer(a, TILES);
         drawerLayer = new Layer(a, DRAWER);
         sheetLayer = new Layer(a, SHEET);
-        toastLayer = new Layer(a, TOAST);
         menuLayer = new Layer(a, MENU);
+        notifLayer = new Layer(a, NOTIF);
+        toastLayer = new Layer(a, TOAST);
         recentLayer = new Layer(a, RECENT);
         // Hardware layers on the GPU: only the one that changed is redrawn; moving, fading and scaling stay cheap.
         // Not on Android 8 to 11: on older GPUs (a Mi Box 3's Mali-450) redrawing and compositing a big layer on every
         // frame cost more than drawing straight to the screen (measured: focus on the picks 33 → 12 ms a frame, the
         // drawer 19 → 17 ms).
         for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
-        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, menuLayer, toastLayer, recentLayer}) {
+        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, menuLayer, notifLayer, toastLayer, recentLayer}) {
             v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);   // TalkBack reads the items (Spoken)
             addView(v);
         }
-        setContentDescription("Free My TV");
+        setContentDescription("Nexus TV");
         recentLayer.setVisibility(INVISIBLE);
         drawerLayer.setVisibility(INVISIBLE);
         menuLayer.setVisibility(INVISIBLE);
+        notifLayer.setVisibility(INVISIBLE);
         for (int i = 0; i < topFocus.length; i++) {
             topFocus[i] = new Spring(0.26f, 0.85f, 0);
             topRects[i] = new RectF();
@@ -660,6 +725,29 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         for (int i = 0; i < watchFocus.length; i++) watchFocus[i] = new Spring(0.32f, 0.78f, 0);
         topMode = Prefs.topContent();
+        RemoteServer.setInputListener(new RemoteServer.RemoteInputListener() {
+            @Override public void onRemotePointerMove(float dx, float dy) {
+                post(() -> {
+                    remotePointerVisible = true;
+                    lastRemotePointerAt = SystemClock.uptimeMillis();
+                    float sens = 2.2f;
+                    remotePointerX = Math.max(10 * k, Math.min(w - 10 * k, remotePointerX + dx * sens));
+                    remotePointerY = Math.max(10 * k, Math.min(h - 10 * k, remotePointerY + dy * sens));
+                    hover(remotePointerX, remotePointerY);
+                    notifLayer.invalidate();
+                    wake();
+                });
+            }
+            @Override public void onRemotePointerClick() {
+                post(() -> {
+                    remotePointerVisible = true;
+                    lastRemotePointerAt = SystemClock.uptimeMillis();
+                    tap(remotePointerX, remotePointerY);
+                    notifLayer.invalidate();
+                    wake();
+                });
+            }
+        });
         watchArt = new WatchArt(a, () -> {
             heroDirty = true;
             updateTint();
@@ -667,6 +755,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             wake();
         });
         setLightButtons(HomeApps.topButtons(null));
+        NowPlaying.onNotificationsChanged = () -> {
+            statusDirty = true;
+            heroDirty = true;
+            if (notifLayer != null) notifLayer.invalidate();
+            wake();
+            postInvalidate();
+        };
         recs.setLight(true);
         checkNight(false);
         sheetLayer.setVisibility(INVISIBLE);
@@ -770,6 +865,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
      */
     void reset(boolean animated) {
         wake();
+        closeAllModals();
         cancelReorder(!animated);
         closeMenu(!animated);
         if (recents != null) recents.close();   // Home closes Recent Apps too (twice opens it: HomeActivity)
@@ -840,22 +936,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     @Override protected void onMeasure(int widthSpec, int heightSpec) {
         int width = MeasureSpec.getSize(widthSpec), height = MeasureSpec.getSize(heightSpec);
-        float kk = width / 1920f;
         measure(sky, width, height);
-        measure(heroLayer, width, Math.round(790 * kk));
-        // The icons at the top left need the whole width; with them off the layer keeps its old size (the corner buttons
-        // only), so the GPU still composites a small layer.
+        measure(heroLayer, width, height);
         statusWide = Prefs.statusIcons();
-        measure(status, statusWide ? width : Math.round(1160 * kk), Math.round(240 * kk));
-        // Sized to what they draw (the glass and its shadow; the grown tiles and their shadows): smaller layers are
-        // cheaper for the GPU to composite on every frame of the drawer animation.
-        measure(platter, width, Math.round(320 * kk));
-        measure(tiles, width, Math.round(270 * kk));
-        measure(drawerLayer, width, Math.round(600 * kk));
+        measure(status, width, height);
+        measure(platter, width, height);
+        measure(tiles, width, height);
+        measure(drawerLayer, width, height);
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
-        measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
+        measure(toastLayer, width, height);
         measure(recentLayer, width, height);
+        measure(notifLayer, width, height);
         setMeasuredDimension(width, height);
     }
 
@@ -865,19 +957,19 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
         int width = r - l, height = b - t;
-        float kk = width / 1920f;
         sky.layout(0, 0, width, height);
-        place(heroLayer, 0, 0);
-        place(status, statusWide ? 0 : width - status.getMeasuredWidth(), 0);
-        place(platter, 0, Math.round(750 * kk));
-        place(tiles, 0, Math.round(790 * kk));
-        place(drawerLayer, 0, Math.round(470 * kk));
+        heroLayer.layout(0, 0, width, height);
+        status.layout(0, 0, width, height);
+        platter.layout(0, 0, width, height);
+        tiles.layout(0, 0, width, height);
+        drawerLayer.layout(0, 0, width, height);
         sheetLayer.layout(0, 0, width, height);
         menuLayer.layout(0, 0, width, height);
         sheetLayer.setPivotX(width / 2f);
         sheetLayer.setPivotY(height / 2f);
-        place(toastLayer, 0, 0);
+        toastLayer.layout(0, 0, width, height);
         recentLayer.layout(0, 0, width, height);
+        notifLayer.layout(0, 0, width, height);
     }
 
     private static void place(View v, int x, int y) {
@@ -1039,6 +1131,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // drop frames (measured: ~50 ms of GPU per frame). The app tiles have no glass; the top buttons fade out as
         // they rise; the drawer is drawn resting in place; the glass shelf is redrawn once the drawer stops, so the
         // glass shows the background where it ended up.
+        boolean notifMoving = notifSlide.step(dt);
+        boolean remoteModalMoving = remoteModalSlide.step(dt);
+        if (notifMoving || notifOpen || musicModalOpen || notifSlide.value > 0.005f
+                || remoteModalMoving || remoteModalOpen || remoteModalSlide.value > 0.005f || remotePointerVisible) {
+            notifLayer.setVisibility(VISIBLE);
+            notifLayer.invalidate();
+        } else if (!notifOpen && !musicModalOpen && !remoteModalOpen && notifSlide.value <= 0.005f && remoteModalSlide.value <= 0.005f) {
+            notifLayer.setVisibility(INVISIBLE);
+        }
         if (tilesMoving || tilesDirty) tiles.invalidate();
         if (statusMoving || statusDirty || bgFading) status.invalidate();
         if (heroMoving || heroDirty || heroFading) heroLayer.invalidate();
@@ -1061,7 +1162,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Busy: something is moving, or the sheet or the drawer is open.
         boolean busy = tilesMoving || statusMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
                 || menuMoving || sheetMoving || toastFading || heroFading || bgFading || nightMoving || tintMoving || sheetOpen
-                || sheet.value > 0.001f || recentMoving || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty();
+                || sheet.value > 0.001f || recentMoving || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty()
+                || notifMoving || notifOpen || musicModalOpen || notifSlide.value > 0.001f
+                || remoteModalMoving || remoteModalOpen || remoteModalSlide.value > 0.001f;
         idle = !busy;
         if (busy) Choreographer.getInstance().postFrameCallback(this);
         else Choreographer.getInstance().postFrameCallbackDelayed(this, 1000);
@@ -1337,19 +1440,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     // MARK: - Night look
 
-    /** Day or night right now (from the sun at your location); `animate`: with the transition. */
+    /** Permanent dark theme for modern flat design */
     private void checkNight(boolean animate) {
-        boolean want = data.isNight(System.currentTimeMillis());
-        if (want == nightTarget) return;
-        nightTarget = want;
-        if (animate && running) {
-            nightFrom = night;
-            nightAt = SystemClock.uptimeMillis();
-        } else {
-            night = want ? 1 : 0;
-            nightAt = 0;
-            nightChanged();
-        }
+        night = 1f;
+        nightTarget = true;
+        nightAt = 0;
+        nightChanged();
     }
 
     /** Advances the day ⇄ night transition; true while it runs. */
@@ -1634,6 +1730,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         tilesDirty = true;
         platter.invalidate();
+        try {
+            RemoteServer.broadcastFavoriteApps();
+        } catch (Throwable ignored) {}
     }
 
     private void layoutShelf() {
@@ -1675,17 +1774,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         wake();
     }
 
-    /** Shelf layer: the glass bar and its shadow (it only changes with the background). */
+    /** Shelf layer: "Apps favoritos" section title */
     private void drawPlatter(Canvas c) {
         if (shelf.isEmpty()) return;
-        float radius = (TILE_RADIUS + SHELF_PAD) * k;
-        tmp.set(platterRect);
-        tmp.offset(0, 18 * k);
-        shadow.setColor(tone(0x1F000000, 0x52000000));
-        shadows.draw(c, tmp, radius, SHADOW_BLUR * k, shadow);
-        // White glass by day; smoked glass at night.
-        scene.liquid(c, platterRect, radius, tone(glassLight(), SMOKE), tone(0.42f, 0.12f), tone(0.03f, 0.08f),
-                tone(30, 34) * k, tone(22, 28) * k, tone(0.65f, 0.95f), 1);
+        Paint headerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        headerPaint.setColor(0xFFF0F0F0);
+        headerPaint.setTextSize(22 * k);
+        headerPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        c.drawText("Apps favoritos", MARGIN * k, platterRect.top - 14 * k, headerPaint);
     }
 
     /** The quotes row's text and sizes, for one set of coins, prices and text size. */
@@ -1750,7 +1846,32 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** What's playing changed (or stopped). */
     private void onPlaying() {
         fitPlaying();
+        if (playing.playing) {
+            if (lastDismissedTrack == null || !lastDismissedTrack.equals(playing.title)) {
+                musicDismissed = false;
+            }
+        }
+        if (musicDismissed) {
+            musicActive = false;
+            musicPlaying = false;
+        } else {
+            if (playing.playing) {
+                musicActive = true;
+                musicPlaying = true;
+                lastMusicAt = SystemClock.uptimeMillis();
+            } else if (playing.text != null || playing.title != null) {
+                if (SystemClock.uptimeMillis() - lastMusicAt < 60_000) {
+                    musicActive = true;
+                    musicPlaying = false;
+                } else {
+                    musicActive = false;
+                }
+            } else {
+                musicActive = false;
+            }
+        }
         heroDirty = true;
+        statusDirty = true;
         wake();
         // Only a new title bounces the bars and is said to TalkBack: not a subtitle some players rewrite every second (the
         // time), and not the same title again when the screen shows.
@@ -1789,56 +1910,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Coin logo + price in the configured currency, in a row at the right end of the tab bar. */
     private void drawQuotes(Canvas c) {
-        boolean clock = clockMode();
-        // At the right margin, under the round buttons: the shelf's glass is narrower and centred with few apps.
-        float right = CONTENT_R * k;
-        applyTone();
-        Paint text = clock ? lClockQuote : lQuote;
-        // The corner buttons' names appear in this row: the quotes fade out while one of them has focus.
-        float fade = 1;
-        for (int i = 3; i < 3 + lightButtons.size() && !clock; i++) fade = Math.min(fade, 1 - Ui.clamp(topFocus[i].value));
-        if (fade <= 0.01f) return;
-        int textColor = text.getColor();
-        text.setColor(Ui.alpha(textColor, fade));
-        // What an app is playing takes the quotes' place while it plays.
-        String line = clock ? playingClock : playingTab;
-        if (line != null) {
-            float cap = clock ? playingClockCap : playingTabCap, gap = cap * 0.6f;
-            float base = clock ? L_QUOTES_BASE * k : (L_TABBAR_TOP + L_TABBAR_H / 2) * k + cap / 2;
-            float x = clock ? MARGIN * k : right - playingTabWidth - gap - NowPlaying.barsWidth(cap);
-            NowPlaying.drawBars(c, x, base, cap, text, SystemClock.uptimeMillis() < barsUntil, barRect);
-            c.drawText(line, x + NowPlaying.barsWidth(cap) + gap, base, text);
-            text.setColor(textColor);
-            return;
-        }
-        // One read of the list, so n always matches the coins drawn below.
-        int[] coins = HomeData.active();
-        int n = coins.length;
-        if (n == 0) { text.setColor(textColor); return; }
-        // Measured once per set of prices: this row is redrawn on every frame of the cards' focus animation, and
-        // measuring text there cost ~3 ms a frame on a Mi Box 3.
-        Quotes q = quotes;
-        if (q == null || !q.matches(coins, data.prices, text.getTextSize())) {
-            q = quotes = new Quotes(coins, data.prices, text);
-        }
-        // On the tab row, at the right.
-        float base = clock ? L_QUOTES_BASE * k : (L_TABBAR_TOP + L_TABBAR_H / 2) * k + q.halfCap;
-        float cap = q.cap, gap = (clock ? 8 : 6) * k, spacing = (clock ? 32 : 24) * k;
-        float total = spacing * (n - 1);
-        for (int i = 0; i < n; i++) total += q.glyphs[i] + gap + q.widths[i];
-        float x = clock ? MARGIN * k : right - total;
-        int coinColor = clock ? text.getColor() : Ui.alpha(tone(0xB38E8E93, 0x8CFFFFFF), fade);
-        for (int i = 0; i < n; i++) {
-            Glyphs.coin(getContext(), c, HomeData.COINS[coins[i]], x + q.glyphs[i] / 2, base - cap / 2, cap, coinColor);
-            x += q.glyphs[i] + gap;
-            c.drawText(q.values[i], x, base, text);
-            x += q.widths[i] + spacing;
-        }
-        text.setColor(textColor);
-        String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-        if (stale.isEmpty()) return;
-        if (clock) c.drawText(stale, x - spacing + 24 * k + staleQuote.measureText(stale), base, staleQuote);
-        else c.drawText(stale, right - total - 24 * k, base, staleQuote);
+        return;
     }
 
     private void drawTiles(Canvas c) {
@@ -1952,6 +2024,20 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             drawLogo(c, it, cell, s, 0);
         } else {
             if (it.tile != null) roundImage(c, it.tile, it.tileShader, cell, r);
+        }
+        if (fc > 0.01f) {
+            Paint borderP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            borderP.setStyle(Paint.Style.STROKE);
+            borderP.setStrokeWidth(3.5f * k);
+            borderP.setColor(Ui.alpha(0xFFFFFFFF, fc));
+            c.drawRoundRect(cell, r, r, borderP);
+
+            Paint labelP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            labelP.setColor(0xFFFFFFFF);
+            labelP.setTextSize(18 * k);
+            labelP.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            float lw = labelP.measureText(it.label);
+            c.drawText(it.label, cx - lw / 2, cell.bottom + 26 * k, labelP);
         }
     }
 
@@ -2919,6 +3005,42 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void tap(float x, float y) {
         wake();
         if (reordering) return;
+        if (remoteModalOpen) {
+            if (remoteModalCloseRect.contains(x, y) || !remoteModalCardRect.contains(x, y)) {
+                closeRemoteModal();
+            }
+            return;
+        }
+        if (musicModalOpen) {
+            tapMusicModal(x, y);
+            return;
+        }
+        if (notifOpen) {
+            float drawerW = 540 * k;
+            float left = w - drawerW * notifSlide.value;
+            if (x < left) {
+                closeNotif();
+                return;
+            }
+            if (notifCloseRect.contains(x, y)) {
+                closeNotif();
+                return;
+            }
+            if (notifClearRect.contains(x, y)) {
+                NowPlaying.dismissAllNotifications();
+                notifIndex = -1;
+                notifLayer.invalidate();
+                return;
+            }
+            for (int i = 0; i < notifCardRects.size(); i++) {
+                if (notifCardRects.get(i).contains(x, y)) {
+                    notifIndex = i;
+                    pickNotif();
+                    return;
+                }
+            }
+            return;
+        }
         if (menuOpen) {   // a click on a row picks it; anywhere else closes the menu (never what's behind it)
             int row = menuAt(x, y);
             if (row < 0) {
@@ -3000,7 +3122,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
      */
     private int topAt(float x, float y) {
         int hit = hit(topRects, x, y);
-        return hit >= 3 + lightButtons.size() || hit >= 0 && hit < 3 && !picksMode() ? -1 : hit;
+        return hit > topMaxIndex() || hit >= 0 && hit < 3 && !picksMode() ? -1 : hit;
     }
 
     /**
@@ -3065,6 +3187,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     boolean onKey(KeyEvent e) {
         wake();
+        if (e.getKeyCode() == KeyEvent.KEYCODE_HOME) {
+            closeAllModals();
+        }
+        if (remoteModalOpen) return remoteModalKey(e);
+        if (musicModalOpen) return musicModalKey(e);
+        if (notifOpen) return notifKey(e);
         if (menuOpen) return menuKey(e);
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
         if (recents != null && recents.isOpen()) {   // not as it fades out: an OK or ▲ then is the home screen's, not a card's
@@ -3102,6 +3230,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                if (SystemClock.uptimeMillis() - reorderDroppedAt < 800) {
+                    okDown = okHeld = false;
+                    holdArmed = false;
+                    handler.removeCallbacks(holdStart);
+                    return true;
+                }
                 // Opens on release, and only if the press happened here: the release of an OK pressed inside another
                 // app opens nothing.
                 // Held (~0.5 s) on a shelf app: move mode; on an app in All Apps: on or off the shelf; on a Continue
@@ -3146,6 +3280,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void back() {
+        if (musicModalOpen) {
+            closeMusicModal();
+            return;
+        }
+        if (notifOpen) {
+            closeNotif();
+            return;
+        }
         if (sheetOpen) {
             closeSheet();
         } else if (zone == Z_DRAWER || zone == WIDGETS) {
@@ -3345,8 +3487,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 selectTab(topIndex);
                 return;
             }
-            it = lightButtons.get(topIndex - 3);
-            r = topRects[topIndex];
+            click.open();
+            handleTopButton(topIndex);
+            return;
         } else if (zone == Z_WATCH) {
             if (watchIndex >= watching.size()) return;
             click.open();
@@ -3354,9 +3497,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             return;
         } else if (zone == Z_CARDS) {
             Recs.Pick p = cardIndex < cards.size() ? cards.get(cardIndex) : null;
-            if (p == null || p.pkg == null) return;
-            it = HomeApps.app(p.pkg, Recs.serviceName(p), p.link);
-            r = cardRects[cardIndex];
+            if (p == null) return;
+            click.open();
+            openMoviePick(p);
+            return;
         } else {
             if (shelf.isEmpty()) return;
             it = shelf.get(shelfIndex);
@@ -3382,6 +3526,1139 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean opened = HomeApps.open(activity, it, this, Math.round(r.left), Math.round(r.top),
                 Math.round(r.width()), Math.round(r.height()));
         if (!opened) showToast(Ui.trf("Couldn't open {app}.", "app", it.label));
+    }
+
+    private void openMoviePick(Recs.Pick p) {
+        String title = p.title != null ? p.title.trim() : "";
+        String imdb = p.imdb;
+        if ((imdb == null || imdb.isEmpty()) && p.link != null) {
+            int idx = p.link.indexOf("tt");
+            if (idx >= 0) {
+                int end = p.link.indexOf("/", idx);
+                if (end < 0) end = p.link.indexOf("?", idx);
+                if (end < 0) end = p.link.length();
+                imdb = p.link.substring(idx, end);
+            }
+        }
+        boolean isMovie = !"tv".equalsIgnoreCase(p.kind);
+        String pref = Prefs.moviePlayer();
+
+        String first = "stremio".equalsIgnoreCase(pref) ? "stremio" : "unitv";
+        String second = "unitv".equals(first) ? "stremio" : "unitv";
+
+        if (tryOpenPlayer(first, title, imdb, isMovie)) return;
+        if (tryOpenPlayer(second, title, imdb, isMovie)) return;
+        if (tryOpenPlayer("youtube", title, imdb, isMovie)) return;
+
+        showToast("Nenhum app disponível para reproduzir o vídeo.");
+    }
+
+    private boolean tryOpenPlayer(String player, String title, String imdb, boolean isMovie) {
+        PackageManager pm = getContext().getPackageManager();
+        if ("unitv".equals(player)) {
+            String pkg = "com.integration.unitvsiptv";
+            if (HomeApps.launchIntent(pm, pkg) == null) return false;
+            try {
+                android.content.ClipboardManager cb = (android.content.ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cb != null) {
+                    cb.setPrimaryClip(android.content.ClipData.newPlainText("movie_search", title));
+                }
+            } catch (Throwable ignored) {}
+            Intent launch = pm.getLaunchIntentForPackage(pkg);
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                launch.putExtra("searchWord", title);
+                launch.putExtra("extra_searchWord", title);
+                launch.putExtra("keyword", title);
+                launch.putExtra("query", title);
+                launch.putExtra("voiceSearchWord", title);
+                launch.putExtra("search_keyword", title);
+                launch.putExtra("title", title);
+                launch.putExtra("name", title);
+                launch.putExtra("vod_name", title);
+                try {
+                    getContext().startActivity(launch);
+                    showToast("Pesquisando \"" + title + "\" no UniTV");
+                    return true;
+                } catch (Throwable ignored) {}
+            }
+            return false;
+        } else if ("stremio".equals(player)) {
+            String pkg = "com.stremio.one";
+            if (HomeApps.launchIntent(pm, pkg) == null) return false;
+            if (imdb != null && imdb.startsWith("tt")) {
+                String uri = isMovie
+                        ? "stremio:///detail/movie/" + imdb + "/" + imdb + "?autoPlay=true"
+                        : "stremio:///detail/series/" + imdb + "?autoPlay=true";
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
+                intent.setPackage(pkg);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                try {
+                    getContext().startActivity(intent);
+                    return true;
+                } catch (Throwable ignored) {}
+            }
+            Intent launch = pm.getLaunchIntentForPackage(pkg);
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
+                    getContext().startActivity(launch);
+                    return true;
+                } catch (Throwable ignored) {}
+            }
+            return false;
+        } else if ("youtube".equals(player)) {
+            for (String pkg : new String[]{"org.smarttube.stable", "com.google.android.youtube.tv", "com.google.android.youtube", "org.schabi.newpipe", "com.teamsmart.videomanager.tv"}) {
+                if (HomeApps.launchIntent(pm, pkg) != null) {
+                    try {
+                        Intent yt = new Intent(Intent.ACTION_SEARCH);
+                        yt.setPackage(pkg);
+                        yt.putExtra("query", title);
+                        yt.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        getContext().startActivity(yt);
+                        return true;
+                    } catch (Throwable e) {
+                        Intent launch = pm.getLaunchIntentForPackage(pkg);
+                        if (launch != null) {
+                            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            try {
+                                getContext().startActivity(launch);
+                                return true;
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        return false;
+    }
+
+    private int topMaxIndex() {
+        return (musicActive && !musicDismissed) ? 11 : 5;
+    }
+
+    public void toggleRemoteModal() {
+        if (remoteModalOpen) closeRemoteModal();
+        else openRemoteModal();
+    }
+
+    private void openRemoteModal() {
+        remotePairCode = RemoteServer.generateNewPairToken();
+        Prefs.saveRecentPairToken(remotePairCode);
+        String base = RemoteServer.getBaseUrl(getContext());
+        remoteUrl = base + "/?pair=" + remotePairCode;
+        try {
+            remoteQr = qrBitmap(Qr.encode(remoteUrl));
+        } catch (Throwable t) {
+            remoteQr = null;
+        }
+        remoteModalOpen = true;
+        remoteModalSlide.target = 1;
+        notifLayer.setVisibility(VISIBLE);
+        notifLayer.invalidate();
+        statusDirty = true;
+        wake();
+    }
+
+    public void closeAllModals() {
+        if (remoteModalOpen) closeRemoteModal();
+        if (musicModalOpen) closeMusicModal();
+        if (notifOpen) closeNotif();
+        if (menuOpen) closeMenu(false);
+    }
+
+    private void closeRemoteModal() {
+        remoteModalOpen = false;
+        remoteModalSlide.target = 0;
+        notifLayer.invalidate();
+        statusDirty = true;
+        wake();
+    }
+
+    private boolean remoteModalKey(KeyEvent e) {
+        int code = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        if (code == KeyEvent.KEYCODE_HOME) {
+            if (down) closeRemoteModal();
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE
+                || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+            if (down) closeRemoteModal();
+            return true;
+        }
+        return true;
+    }
+
+    void toggleNotif() {
+        if (notifOpen) closeNotif();
+        else openNotif();
+    }
+
+    public void openNotif() {
+        notifOpen = true;
+        int count = NowPlaying.notificationCount();
+        notifIndex = count > 0 ? 0 : -1;
+        notifSlide.target = 1;
+        notifLayer.setVisibility(VISIBLE);
+        notifLayer.invalidate();
+        statusDirty = true;
+        wake();
+    }
+
+    private void closeNotif() {
+        notifOpen = false;
+        notifSlide.target = 0;
+        notifLayer.invalidate();
+        statusDirty = true;
+        wake();
+    }
+
+    private boolean notifKey(KeyEvent e) {
+        int code = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+
+        if (code == KeyEvent.KEYCODE_HOME) {
+            if (down) closeNotif();
+            return true;
+        }
+
+        // Dismiss immediately on BACK or ESCAPE (both down and up consumed)
+        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
+            if (down) closeNotif();
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+            if (down) {
+                int count = NowPlaying.notificationCount();
+                if (notifIndex == -1 && count > 0) {
+                    notifIndex = -2; // move from Close button to "Limpar tudo"
+                    notifLayer.invalidate();
+                } else {
+                    // Navigating left closes the drawer and returns focus to home
+                    closeNotif();
+                }
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (down) {
+                if (notifIndex == -2) {
+                    notifIndex = -1; // move from "Limpar tudo" to Close button
+                    notifLayer.invalidate();
+                }
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_UP) {
+            if (down) {
+                if (notifIndex > 0) {
+                    notifIndex--;
+                } else if (notifIndex == 0) {
+                    notifIndex = -1; // move up to Close button
+                }
+                notifLayer.invalidate();
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (down) {
+                int count = NowPlaying.notificationCount();
+                if (notifIndex < 0) {
+                    if (count > 0) notifIndex = 0; // move down from header to first card
+                } else if (notifIndex < count - 1) {
+                    notifIndex++;
+                }
+                notifLayer.invalidate();
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            if (down) {
+                pickNotif();
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private void pickNotif() {
+        if (notifIndex == -1) {
+            // Close button
+            closeNotif();
+            return;
+        }
+        if (notifIndex == -2) {
+            // "Limpar tudo"
+            NowPlaying.dismissAllNotifications();
+            notifIndex = -1;
+            statusDirty = true;
+            notifLayer.invalidate();
+            wake();
+            return;
+        }
+        List<NowPlaying.NotificationItem> list = NowPlaying.activeNotifications;
+        if (notifIndex >= 0 && notifIndex < list.size()) {
+            NowPlaying.NotificationItem it = list.get(notifIndex);
+            if (it.intent != null) {
+                try {
+                    it.intent.send();
+                } catch (Throwable ignored) {}
+            }
+            NowPlaying.dismissNotification(it.key);
+            closeNotif();
+        }
+    }
+
+    public void openMusicModal() {
+        musicModalOpen = true;
+        musicModalIndex = 0;
+        notifLayer.setVisibility(VISIBLE);
+        notifLayer.invalidate();
+        wake();
+    }
+
+    private void closeMusicModal() {
+        musicModalOpen = false;
+        if (!notifOpen && notifSlide.value <= 0.005f) {
+            notifLayer.setVisibility(INVISIBLE);
+        }
+        notifLayer.invalidate();
+        wake();
+    }
+
+    private boolean musicModalKey(KeyEvent e) {
+        int code = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+
+        if (code == KeyEvent.KEYCODE_HOME || code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
+            if (down) closeMusicModal();
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+            if (down) {
+                if (musicModalIndex >= 10) {
+                    musicModalIndex = 2; // Jump from track list to Play/Pause
+                } else if (musicModalIndex > 0 && musicModalIndex <= 3) {
+                    musicModalIndex--;
+                } else if (musicModalIndex == -1) {
+                    musicModalIndex = -2; // Move from Close to Search
+                }
+                notifLayer.invalidate();
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (down) {
+                if (musicModalIndex >= 0 && musicModalIndex <= 3) {
+                    if (musicModalIndex < 3) {
+                        musicModalIndex++;
+                    } else {
+                        musicModalIndex = 10; // Jump to Track list
+                    }
+                } else if (musicModalIndex == 4) {
+                    musicModalIndex = 10; // Jump to Track list
+                } else if (musicModalIndex == -2) {
+                    musicModalIndex = -1; // Move from Search to Close
+                }
+                notifLayer.invalidate();
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_UP) {
+            if (down) {
+                if (musicModalIndex >= 0 && musicModalIndex <= 3) {
+                    musicModalIndex = -2; // Move up to Search
+                } else if (musicModalIndex == 4) {
+                    musicModalIndex = 2; // Move up to Play/Pause
+                } else if (musicModalIndex == 10) {
+                    musicModalIndex = -2; // Move up from first track to Search
+                } else if (musicModalIndex > 10) {
+                    musicModalIndex--;
+                }
+                notifLayer.invalidate();
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (down) {
+                if (musicModalIndex == -1 || musicModalIndex == -2) {
+                    musicModalIndex = 2; // Move down to Play/Pause
+                } else if (musicModalIndex >= 0 && musicModalIndex <= 3) {
+                    musicModalIndex = 4; // Move down to Abrir Spotify
+                } else if (musicModalIndex >= 10 && musicModalIndex < 10 + SPOTIFY_PLAYLIST.length - 1) {
+                    musicModalIndex++;
+                }
+                notifLayer.invalidate();
+            }
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            if (down) {
+                pickMusicModal();
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private void skipPrevious() {
+        musicPlaying = true;
+        lastMusicAt = SystemClock.uptimeMillis();
+        boolean handled = false;
+        if (playing.activeController != null) {
+            try {
+                playing.activeController.getTransportControls().skipToPrevious();
+                handled = true;
+            } catch (Exception ignored) {}
+        }
+        if (!handled) {
+            AudioManager am = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS));
+            }
+        }
+        statusDirty = true;
+        wake();
+    }
+
+    private void skipNext() {
+        musicPlaying = true;
+        lastMusicAt = SystemClock.uptimeMillis();
+        boolean handled = false;
+        if (playing.activeController != null) {
+            try {
+                playing.activeController.getTransportControls().skipToNext();
+                handled = true;
+            } catch (Exception ignored) {}
+        }
+        if (!handled) {
+            AudioManager am = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT));
+            }
+        }
+        statusDirty = true;
+        wake();
+    }
+
+    private void togglePlayPause() {
+        musicPlaying = !musicPlaying;
+        lastMusicAt = SystemClock.uptimeMillis();
+        if (musicDismissed) musicDismissed = false;
+        boolean handled = false;
+        if (playing.activeController != null) {
+            try {
+                if (musicPlaying) {
+                    playing.activeController.getTransportControls().play();
+                } else {
+                    playing.activeController.getTransportControls().pause();
+                }
+                handled = true;
+            } catch (Exception ignored) {}
+        }
+        if (!handled) {
+            AudioManager am = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                int key = musicPlaying ? KeyEvent.KEYCODE_MEDIA_PLAY : KeyEvent.KEYCODE_MEDIA_PAUSE;
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+            }
+        }
+        statusDirty = true;
+        wake();
+    }
+
+    private void toggleShuffle() {
+        try {
+            getContext().sendBroadcast(new Intent("com.spotify.mobile.android.service.action.SHUFFLE"));
+        } catch (Exception ignored) {}
+        AudioManager am = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (am != null) {
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, 201));
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, 201));
+        }
+        showToast("Modo Aleatório (Shuffle)");
+        notifLayer.invalidate();
+    }
+
+    private void playTrackFromList(int idx) {
+        if (idx < 0 || idx >= SPOTIFY_PLAYLIST.length) return;
+        String artist = SPOTIFY_PLAYLIST[idx][0];
+        String title = SPOTIFY_PLAYLIST[idx][1];
+        String query = title + " " + artist;
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(query)));
+            intent.setPackage("com.spotify.tv.android");
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            showToast("Tocando: " + title);
+            closeMusicModal();
+        } catch (Throwable t) {
+            try {
+                Intent fallback = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(query)));
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(fallback);
+                showToast("Tocando: " + title);
+                closeMusicModal();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private void openSpotifySearch() {
+        try {
+            Intent s = new Intent(Intent.ACTION_SEARCH);
+            s.setPackage("com.spotify.tv.android");
+            s.putExtra("query", "");
+            s.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(s);
+            closeMusicModal();
+        } catch (Throwable t) {
+            try {
+                Intent s2 = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search"));
+                s2.setPackage("com.spotify.tv.android");
+                s2.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(s2);
+                closeMusicModal();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private void pickMusicModal() {
+        if (musicModalIndex == -1) {
+            closeMusicModal();
+            return;
+        }
+        if (musicModalIndex == -2) {
+            openSpotifySearch();
+            return;
+        }
+        if (musicModalIndex == 0) {
+            toggleShuffle();
+            return;
+        }
+        if (musicModalIndex == 1) {
+            skipPrevious();
+            showToast("Faixa anterior");
+            notifLayer.invalidate();
+            return;
+        }
+        if (musicModalIndex == 2) {
+            togglePlayPause();
+            showToast(musicPlaying ? "Reproduzindo" : "Pausado");
+            notifLayer.invalidate();
+            return;
+        }
+        if (musicModalIndex == 3) {
+            skipNext();
+            showToast("Próxima faixa");
+            notifLayer.invalidate();
+            return;
+        }
+        if (musicModalIndex == 4) {
+            launchSpotifyApp();
+            closeMusicModal();
+            return;
+        }
+        if (musicModalIndex >= 10 && musicModalIndex < 10 + SPOTIFY_PLAYLIST.length) {
+            playTrackFromList(musicModalIndex - 10);
+            return;
+        }
+    }
+
+    private void launchSpotifyApp() {
+        Intent it = getContext().getPackageManager().getLaunchIntentForPackage("com.spotify.tv.android");
+        if (it == null) it = getContext().getPackageManager().getLaunchIntentForPackage("com.spotify.music");
+        if (it != null) {
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                getContext().startActivity(it);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private void tapMusicModal(float x, float y) {
+        if (musicModalCloseRect.contains(x, y)) {
+            closeMusicModal();
+            return;
+        }
+        if (musicModalSearchRect.contains(x, y)) {
+            openSpotifySearch();
+            return;
+        }
+        if (musicModalShuffleRect.contains(x, y)) {
+            toggleShuffle();
+            return;
+        }
+        if (musicModalPrevRect.contains(x, y)) {
+            skipPrevious();
+            return;
+        }
+        if (musicModalPlayRect.contains(x, y)) {
+            togglePlayPause();
+            return;
+        }
+        if (musicModalNextRect.contains(x, y)) {
+            skipNext();
+            return;
+        }
+        if (musicModalSpotifyBtnRect.contains(x, y)) {
+            launchSpotifyApp();
+            closeMusicModal();
+            return;
+        }
+        for (int i = 0; i < musicModalTrackRects.size(); i++) {
+            if (musicModalTrackRects.get(i).contains(x, y)) {
+                playTrackFromList(i);
+                return;
+            }
+        }
+    }
+
+    private static String formatDuration(long ms) {
+        if (ms <= 0) return "0:00";
+        long totalSecs = ms / 1000;
+        long mins = totalSecs / 60;
+        long secs = totalSecs % 60;
+        return String.format(Locale.ROOT, "%d:%02d", mins, secs);
+    }
+
+    private void drawMusicModal(Canvas c) {
+        // Dim backdrop
+        Paint dimP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dimP.setColor(0xCC000000);
+        c.drawRect(0, 0, w, h, dimP);
+
+        // Enlarged modal: 1180 x 660 px (in 1080p scale k)
+        float mw = 1180 * k, mh = 660 * k;
+        float mx = (w - mw) / 2, my = (h - mh) / 2;
+        RectF modalR = new RectF(mx, my, mx + mw, my + mh);
+
+        // Modal glass card
+        Paint bgP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bgP.setColor(0xF8111317);
+        c.drawRoundRect(modalR, 24 * k, 24 * k, bgP);
+
+        Paint borderP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        borderP.setStyle(Paint.Style.STROKE);
+        borderP.setStrokeWidth(2f * k);
+        borderP.setColor(0x38FFFFFF);
+        c.drawRoundRect(modalR, 24 * k, 24 * k, borderP);
+
+        // Top bar
+        float headerY = my + 38 * k;
+        Symbols.draw(getContext(), c, "spotify", mx + 46 * k, headerY, 26 * k, 0xFF1DB954);
+
+        Paint headTxtP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        headTxtP.setColor(0xFF1DB954);
+        headTxtP.setTextSize(20 * k);
+        headTxtP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        c.drawText("Spotify Player", mx + 70 * k, headerY + 6.5f * k, headTxtP);
+
+        // Close [X] button
+        float closeRadius = 22 * k;
+        float closeCx = mx + mw - 34 * k - closeRadius;
+        float closeCy = headerY;
+        musicModalCloseRect.set(closeCx - closeRadius, closeCy - closeRadius, closeCx + closeRadius, closeCy + closeRadius);
+        boolean closeFocused = (musicModalIndex == -1);
+
+        Paint closeBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        closeBg.setColor(closeFocused ? 0x55FFFFFF : 0x22FFFFFF);
+        c.drawCircle(closeCx, closeCy, closeRadius, closeBg);
+
+        if (closeFocused) {
+            Paint ringP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            ringP.setStyle(Paint.Style.STROKE);
+            ringP.setStrokeWidth(2.5f * k);
+            ringP.setColor(0xFFFFFFFF);
+            c.drawCircle(closeCx, closeCy, closeRadius, ringP);
+        }
+        float xH = 7 * k;
+        Paint xP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        xP.setColor(closeFocused ? 0xFFFFFFFF : 0xDDFFFFFF);
+        xP.setStrokeWidth(2.5f * k);
+        xP.setStrokeCap(Paint.Cap.ROUND);
+        c.drawLine(closeCx - xH, closeCy - xH, closeCx + xH, closeCy + xH, xP);
+        c.drawLine(closeCx + xH, closeCy - xH, closeCx - xH, closeCy + xH, xP);
+
+        // Search button 🔍 "Pesquisar" next to Close button
+        float searchW = 160 * k, searchH = 40 * k;
+        float searchR = closeCx - closeRadius - 16 * k;
+        musicModalSearchRect.set(searchR - searchW, headerY - searchH / 2, searchR, headerY + searchH / 2);
+        boolean searchFocused = (musicModalIndex == -2);
+
+        Paint searchBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        searchBg.setColor(searchFocused ? 0x4D1DB954 : 0x1F2A2C35);
+        c.drawRoundRect(musicModalSearchRect, 20 * k, 20 * k, searchBg);
+
+        if (searchFocused) {
+            Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            fP.setStyle(Paint.Style.STROKE);
+            fP.setStrokeWidth(2.2f * k);
+            fP.setColor(0xFF1DB954);
+            c.drawRoundRect(musicModalSearchRect, 20 * k, 20 * k, fP);
+        }
+
+        Symbols.draw(getContext(), c, "search", musicModalSearchRect.left + 22 * k, musicModalSearchRect.centerY(), 18 * k, searchFocused ? 0xFFFFFFFF : 0xCCFFFFFF);
+
+        Paint searchTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        searchTxt.setColor(searchFocused ? 0xFFFFFFFF : 0xCCFFFFFF);
+        searchTxt.setTextSize(15.5f * k);
+        searchTxt.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        c.drawText("Pesquisar", musicModalSearchRect.left + 42 * k, musicModalSearchRect.centerY() + 5 * k, searchTxt);
+
+        // Divider
+        float divY = headerY + 26 * k;
+        Paint divP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        divP.setColor(0x22FFFFFF);
+        divP.setStrokeWidth(1.2f * k);
+        c.drawLine(mx + 34 * k, divY, mx + mw - 34 * k, divY, divP);
+
+        // ================= LEFT COLUMN: AUDIO PLAYER (width 460) =================
+        float leftColX = mx + 36 * k;
+        float leftColW = 460 * k;
+
+        // Big Album Artwork (220 x 220)
+        float artSize = 220 * k;
+        float artX = leftColX + (leftColW - artSize) / 2;
+        float artY = divY + 20 * k;
+        RectF artR = new RectF(artX, artY, artX + artSize, artY + artSize);
+
+        if (playing.icon != null) {
+            Paint artP = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+            artP.setFilterBitmap(true);
+            BitmapShader shader = new BitmapShader(playing.icon, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+            Matrix sm = new Matrix();
+            sm.setRectToRect(new RectF(0, 0, playing.icon.getWidth(), playing.icon.getHeight()), artR, Matrix.ScaleToFit.CENTER);
+            shader.setLocalMatrix(sm);
+            artP.setShader(shader);
+            c.drawRoundRect(artR, 16 * k, 16 * k, artP);
+        } else {
+            Paint artBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            artBg.setColor(0xFF1E2129);
+            c.drawRoundRect(artR, 16 * k, 16 * k, artBg);
+            Symbols.draw(getContext(), c, "spotify", artR.centerX(), artR.centerY(), 72 * k, 0xFF1DB954);
+        }
+
+        // Title and artist
+        String tStr = (playing.title != null && !playing.title.isEmpty()) ? playing.title : "Nenhuma música tocando";
+        String aStr = (playing.text != null && !playing.text.isEmpty()) ? playing.text : "Abra o Spotify para reproduzir";
+
+        TextPaint heroTitleP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        heroTitleP.setColor(0xFFFFFFFF);
+        heroTitleP.setTextSize(23 * k);
+        heroTitleP.setTextAlign(Paint.Align.CENTER);
+        heroTitleP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+
+        TextPaint heroSubP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        heroSubP.setColor(0xB3FFFFFF);
+        heroSubP.setTextSize(16.5f * k);
+        heroSubP.setTextAlign(Paint.Align.CENTER);
+
+        float textCenter = leftColX + leftColW / 2;
+        CharSequence ellipHero = TextUtils.ellipsize(tStr, heroTitleP, leftColW - 20 * k, TextUtils.TruncateAt.END);
+        c.drawText(ellipHero.toString(), textCenter, artR.bottom + 32 * k, heroTitleP);
+
+        CharSequence ellipArtist = TextUtils.ellipsize(aStr, heroSubP, leftColW - 20 * k, TextUtils.TruncateAt.END);
+        c.drawText(ellipArtist.toString(), textCenter, artR.bottom + 58 * k, heroSubP);
+
+        // Progress bar (Seekbar with REAL-TIME duration and position)
+        long curMs = playing != null ? playing.getCurrentPositionMs() : 0;
+        long durMs = playing != null ? playing.getDurationMs() : 0;
+        if (durMs <= 0) {
+            durMs = 210_000;
+        }
+        if (curMs > durMs) curMs = durMs;
+
+        float fillRatio = durMs > 0 ? Math.min(1f, Math.max(0f, (float) curMs / (float) durMs)) : 0f;
+
+        float progY = artR.bottom + 82 * k;
+        float progW = leftColW - 40 * k;
+        float progLeft = leftColX + 20 * k;
+        float progRight = progLeft + progW;
+
+        Paint progTrackP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        progTrackP.setColor(0x33FFFFFF);
+        progTrackP.setStrokeWidth(4.5f * k);
+        progTrackP.setStrokeCap(Paint.Cap.ROUND);
+        c.drawLine(progLeft, progY, progRight, progY, progTrackP);
+
+        float progFill = progLeft + progW * fillRatio;
+        Paint progFillP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        progFillP.setColor(0xFF1DB954);
+        progFillP.setStrokeWidth(4.5f * k);
+        progFillP.setStrokeCap(Paint.Cap.ROUND);
+        c.drawLine(progLeft, progY, progFill, progY, progFillP);
+
+        // Thumb dot
+        Paint thumbP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        thumbP.setColor(0xFFFFFFFF);
+        c.drawCircle(progFill, progY, 6 * k, thumbP);
+
+        // Timestamp labels in real time
+        String curTimeStr = formatDuration(curMs);
+        String durTimeStr = formatDuration(durMs);
+
+        Paint timeP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        timeP.setColor(0x88FFFFFF);
+        timeP.setTextSize(13 * k);
+        timeP.setTextAlign(Paint.Align.LEFT);
+        c.drawText(curTimeStr, progLeft, progY + 18 * k, timeP);
+        timeP.setTextAlign(Paint.Align.RIGHT);
+        c.drawText(durTimeStr, progRight, progY + 18 * k, timeP);
+
+        // Controls bar: 4 circular buttons [Shuffle, Prev, Play/Pause, Next]
+        float ctrlY = progY + 54 * k;
+        float normalRadius = 24 * k;
+        float playRadius = 30 * k;
+
+        // 0: Shuffle
+        float shufCx = textCenter - 105 * k;
+        musicModalShuffleRect.set(shufCx - normalRadius, ctrlY - normalRadius, shufCx + normalRadius, ctrlY + normalRadius);
+        boolean shufFocused = (musicModalIndex == 0);
+        Paint shufBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        shufBg.setColor(shufFocused ? 0x55FFFFFF : 0x1AFFFFFF);
+        c.drawCircle(shufCx, ctrlY, normalRadius, shufBg);
+        if (shufFocused) {
+            Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            fP.setStyle(Paint.Style.STROKE);
+            fP.setStrokeWidth(2.4f * k);
+            fP.setColor(0xFFFFFFFF);
+            c.drawCircle(shufCx, ctrlY, normalRadius, fP);
+        }
+        Symbols.draw(getContext(), c, "shuffle", shufCx, ctrlY, 20 * k, shufFocused ? 0xFFFFFFFF : 0xB3FFFFFF);
+
+        // 1: Prev
+        float prevCx = textCenter - 42 * k;
+        musicModalPrevRect.set(prevCx - normalRadius, ctrlY - normalRadius, prevCx + normalRadius, ctrlY + normalRadius);
+        boolean prevFocused = (musicModalIndex == 1);
+        Paint prevBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        prevBg.setColor(prevFocused ? 0x55FFFFFF : 0x1AFFFFFF);
+        c.drawCircle(prevCx, ctrlY, normalRadius, prevBg);
+        if (prevFocused) {
+            Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            fP.setStyle(Paint.Style.STROKE);
+            fP.setStrokeWidth(2.4f * k);
+            fP.setColor(0xFFFFFFFF);
+            c.drawCircle(prevCx, ctrlY, normalRadius, fP);
+        }
+        Symbols.draw(getContext(), c, "skip_previous", prevCx, ctrlY, 22 * k, prevFocused ? 0xFFFFFFFF : 0xDDFFFFFF);
+
+        // 2: Play / Pause (Distinct green circle)
+        float playCx = textCenter + 28 * k;
+        musicModalPlayRect.set(playCx - playRadius, ctrlY - playRadius, playCx + playRadius, ctrlY + playRadius);
+        boolean playFocused = (musicModalIndex == 2);
+        Paint playBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        playBg.setColor(playFocused ? 0xFF1ED760 : 0xFF1DB954);
+        c.drawCircle(playCx, ctrlY, playRadius, playBg);
+        if (playFocused) {
+            Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            fP.setStyle(Paint.Style.STROKE);
+            fP.setStrokeWidth(3f * k);
+            fP.setColor(0xFFFFFFFF);
+            c.drawCircle(playCx, ctrlY, playRadius, fP);
+        }
+        Symbols.draw(getContext(), c, musicPlaying ? "pause" : "play", playCx, ctrlY, 26 * k, 0xFFFFFFFF);
+
+        // 3: Next
+        float nextCx = textCenter + 98 * k;
+        musicModalNextRect.set(nextCx - normalRadius, ctrlY - normalRadius, nextCx + normalRadius, ctrlY + normalRadius);
+        boolean nextFocused = (musicModalIndex == 3);
+        Paint nextBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        nextBg.setColor(nextFocused ? 0x55FFFFFF : 0x1AFFFFFF);
+        c.drawCircle(nextCx, ctrlY, normalRadius, nextBg);
+        if (nextFocused) {
+            Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            fP.setStyle(Paint.Style.STROKE);
+            fP.setStrokeWidth(2.4f * k);
+            fP.setColor(0xFFFFFFFF);
+            c.drawCircle(nextCx, ctrlY, normalRadius, fP);
+        }
+        Symbols.draw(getContext(), c, "skip_next", nextCx, ctrlY, 22 * k, nextFocused ? 0xFFFFFFFF : 0xDDFFFFFF);
+
+        // 4: Button "Abrir App do Spotify"
+        float appBtnY = my + mh - 64 * k;
+        float appBtnH = 46 * k;
+        float appBtnW = leftColW - 40 * k;
+        musicModalSpotifyBtnRect.set(leftColX + 20 * k, appBtnY, leftColX + 20 * k + appBtnW, appBtnY + appBtnH);
+        boolean appBtnFocused = (musicModalIndex == 4);
+
+        Paint appBtnBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        appBtnBg.setColor(appBtnFocused ? 0x4D1DB954 : 0x1F2A2E38);
+        c.drawRoundRect(musicModalSpotifyBtnRect, 23 * k, 23 * k, appBtnBg);
+
+        if (appBtnFocused) {
+            Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            fP.setStyle(Paint.Style.STROKE);
+            fP.setStrokeWidth(2.5f * k);
+            fP.setColor(0xFF1DB954);
+            c.drawRoundRect(musicModalSpotifyBtnRect, 23 * k, 23 * k, fP);
+        }
+
+        Paint appBtnTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        appBtnTxt.setColor(appBtnFocused ? 0xFFFFFFFF : 0xCCFFFFFF);
+        appBtnTxt.setTextSize(16 * k);
+        appBtnTxt.setTextAlign(Paint.Align.CENTER);
+        appBtnTxt.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        c.drawText("Abrir App do Spotify", musicModalSpotifyBtnRect.centerX(), musicModalSpotifyBtnRect.centerY() + 5.5f * k, appBtnTxt);
+
+        // ================= VERTICAL DIVIDER =================
+        float vertDivX = leftColX + leftColW + 24 * k;
+        Paint vDivP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        vDivP.setColor(0x1AFFFFFF);
+        vDivP.setStrokeWidth(1.2f * k);
+        c.drawLine(vertDivX, divY + 16 * k, vertDivX, my + mh - 26 * k, vDivP);
+
+        // ================= RIGHT COLUMN: LISTA DE MÚSICAS (width 580) =================
+        float rightColX = vertDivX + 24 * k;
+        float rightColW = mw - (rightColX - mx) - 34 * k;
+
+        // Section header
+        float listTitleY = divY + 32 * k;
+        Paint listHeaderP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        listHeaderP.setColor(0x99FFFFFF);
+        listHeaderP.setTextSize(16 * k);
+        listHeaderP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        c.drawText("MÚSICAS & SUGESTÕES DO SPOTIFY", rightColX, listTitleY, listHeaderP);
+
+        // Track items
+        float trkY = listTitleY + 16 * k;
+        float trkH = 68 * k;
+        float trkGap = 12 * k;
+
+        musicModalTrackRects.clear();
+
+        TextPaint trkTitleP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        trkTitleP.setTextSize(18.5f * k);
+
+        TextPaint trkArtistP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        trkArtistP.setTextSize(14.5f * k);
+
+        Paint numP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        numP.setTextSize(15 * k);
+        numP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+
+        for (int i = 0; i < SPOTIFY_PLAYLIST.length; i++) {
+            RectF trkR = new RectF(rightColX, trkY, rightColX + rightColW, trkY + trkH);
+            musicModalTrackRects.add(trkR);
+
+            boolean focused = (musicModalIndex == 10 + i);
+
+            Paint tBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            tBg.setColor(focused ? 0x3DFFFFFF : 0x17242833);
+            c.drawRoundRect(trkR, 14 * k, 14 * k, tBg);
+
+            if (focused) {
+                Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                fP.setStyle(Paint.Style.STROKE);
+                fP.setStrokeWidth(2.5f * k);
+                fP.setColor(0xFFFFFFFF);
+                c.drawRoundRect(trkR, 14 * k, 14 * k, fP);
+            }
+
+            // Track number or play icon
+            float numX = trkR.left + 24 * k;
+            if (focused) {
+                Symbols.draw(getContext(), c, "play", numX, trkR.centerY(), 18 * k, 0xFF1DB954);
+            } else {
+                numP.setColor(0x88FFFFFF);
+                c.drawText(String.format(Locale.ROOT, "%02d", i + 1), numX - 8 * k, trkR.centerY() + 5 * k, numP);
+            }
+
+            // Title & Artist
+            String songTitle = SPOTIFY_PLAYLIST[i][1];
+            String songArtist = SPOTIFY_PLAYLIST[i][0];
+            String songDuration = SPOTIFY_PLAYLIST[i][2];
+
+            trkTitleP.setColor(focused ? 0xFFFFFFFF : 0xEEFFFFFF);
+            trkTitleP.setTypeface(Typeface.create("sans-serif-medium", focused ? Typeface.BOLD : Typeface.NORMAL));
+
+            float songX = trkR.left + 52 * k;
+            float maxSongW = trkR.width() - 130 * k;
+            CharSequence ellipSong = TextUtils.ellipsize(songTitle, trkTitleP, maxSongW, TextUtils.TruncateAt.END);
+            c.drawText(ellipSong.toString(), songX, trkR.top + 28 * k, trkTitleP);
+
+            trkArtistP.setColor(focused ? 0xCCFFFFFF : 0x88FFFFFF);
+            CharSequence ellipArt = TextUtils.ellipsize(songArtist, trkArtistP, maxSongW, TextUtils.TruncateAt.END);
+            c.drawText(ellipArt.toString(), songX, trkR.top + 52 * k, trkArtistP);
+
+            // Duration on the right
+            Paint durP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            durP.setColor(focused ? 0xFF1DB954 : 0x80FFFFFF);
+            durP.setTextSize(14.5f * k);
+            durP.setTextAlign(Paint.Align.RIGHT);
+            durP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+            c.drawText(songDuration, trkR.right - 20 * k, trkR.centerY() + 5 * k, durP);
+
+            trkY += trkH + trkGap;
+        }
+    }
+
+    public List<HomeApps.Item> getFavoriteShelf() {
+        return new ArrayList<>(shelf);
+    }
+
+    void openAndroidSettings() {
+        Intent it = new Intent();
+        it.setComponent(new android.content.ComponentName("com.android.tv.settings", "com.android.tv.settings.MainSettings"));
+        it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(it);
+        } catch (Exception e) {
+            try {
+                getContext().startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void handleTopButton(int index) {
+        int remoteIdx = (musicActive && !musicDismissed) ? 9 : 3;
+        int bellIdx = (musicActive && !musicDismissed) ? 10 : 4;
+        int cogIdx = (musicActive && !musicDismissed) ? 11 : 5;
+        if (index == remoteIdx) {
+            toggleRemoteModal();
+            return;
+        }
+        if (index == bellIdx) {
+            toggleNotif();
+            return;
+        }
+        if (index == cogIdx) {
+            openAndroidSettings();
+            return;
+        }
+        AudioManager am = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (index == 3) {
+            openMusicModal();
+            return;
+        } else if (index == 4) {
+            // Shuffle
+            try {
+                getContext().sendBroadcast(new Intent("com.spotify.mobile.android.service.action.SHUFFLE"));
+            } catch (Exception ignored) {}
+            if (am != null) {
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, 201));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, 201));
+            }
+            showToast("Shuffle");
+            statusDirty = true;
+            wake();
+        } else if (index == 5) {
+            // Prev
+            musicPlaying = true;
+            lastMusicAt = SystemClock.uptimeMillis();
+            boolean handled = false;
+            if (playing.activeController != null) {
+                try {
+                    playing.activeController.getTransportControls().skipToPrevious();
+                    handled = true;
+                } catch (Exception ignored) {}
+            }
+            if (!handled && am != null) {
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS));
+            }
+            statusDirty = true;
+            wake();
+        } else if (index == 6) {
+            // Play/Pause - INSTANT UPDATE (NO DOUBLE DISPATCH)
+            musicPlaying = !musicPlaying;
+            lastMusicAt = SystemClock.uptimeMillis();
+            if (musicDismissed) musicDismissed = false;
+            boolean handled = false;
+            if (playing.activeController != null) {
+                try {
+                    if (musicPlaying) {
+                        playing.activeController.getTransportControls().play();
+                    } else {
+                        playing.activeController.getTransportControls().pause();
+                    }
+                    handled = true;
+                } catch (Exception ignored) {}
+            }
+            if (!handled && am != null) {
+                int key = musicPlaying ? KeyEvent.KEYCODE_MEDIA_PLAY : KeyEvent.KEYCODE_MEDIA_PAUSE;
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+            }
+            statusDirty = true;
+            wake();
+        } else if (index == 7) {
+            // Next
+            musicPlaying = true;
+            lastMusicAt = SystemClock.uptimeMillis();
+            boolean handled = false;
+            if (playing.activeController != null) {
+                try {
+                    playing.activeController.getTransportControls().skipToNext();
+                    handled = true;
+                } catch (Exception ignored) {}
+            }
+            if (!handled && am != null) {
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT));
+            }
+            statusDirty = true;
+            wake();
+        } else if (index == 8) {
+            // Close X: stop playback, kill Spotify process, close player
+            musicDismissed = true;
+            musicActive = false;
+            musicPlaying = false;
+            lastMusicAt = 0;
+            if (playing.title != null) lastDismissedTrack = playing.title;
+            if (playing.activeController != null) {
+                try {
+                    playing.activeController.getTransportControls().stop();
+                } catch (Exception ignored) {}
+            }
+            if (am != null) {
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_STOP));
+                am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_STOP));
+            }
+            try {
+                android.app.ActivityManager actMgr = (android.app.ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+                if (actMgr != null) {
+                    actMgr.killBackgroundProcesses("com.spotify.tv.android");
+                    actMgr.killBackgroundProcesses("com.spotify.music");
+                }
+            } catch (Exception ignored) {}
+            try {
+                Runtime.getRuntime().exec(new String[]{"am", "force-stop", "com.spotify.tv.android"});
+                Runtime.getRuntime().exec(new String[]{"am", "force-stop", "com.spotify.music"});
+            } catch (Exception ignored) {}
+            playing.text = null;
+            playing.title = null;
+            playing.artist = null;
+            playing.icon = null;
+            playing.playing = false;
+            topIndex = 3;
+            for (int i = 5; i < topRects.length; i++) {
+                topRects[i].setEmpty();
+            }
+            layoutLight();
+            statusDirty = true;
+            heroDirty = true;
+            wake();
+            postInvalidate();
+            showToast("Spotify fechado");
+        }
+        postInvalidate();
     }
 
     // MARK: - Holding OK: All Apps puts the app on the shelf or takes it off; on the shelf, the app is lifted to move;
@@ -3501,9 +4778,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 // The press that lifted the app is still held: its repeats and release do nothing; a new press drops it.
                 if (down && e.getRepeatCount() == 0) {
                     okDown = okHeld = false;
+                    holdArmed = false;
+                    handler.removeCallbacks(holdStart);
                     dropReorder();
                 } else if (!down) {
                     okDown = okHeld = false;
+                    holdArmed = false;
+                    handler.removeCallbacks(holdStart);
                 }
                 return true;
             case KeyEvent.KEYCODE_BACK:
@@ -3575,6 +4856,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void dropReorder() {
         if (!reordering) return;
         reordering = false;
+        reorderDroppedAt = SystemClock.uptimeMillis();
+        okDown = okHeld = false;
+        holdArmed = false;
+        handler.removeCallbacks(holdStart);
         orderRevision++;
         moveLift.target = 0;
         List<HomeApps.Item> items = reorderTop ? lightButtons : shelf;
@@ -3723,7 +5008,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             for (int i = 0; i < others.size(); i++) out.add(a11yId(GRID, i));
             return;
         }
-        for (int i = picksMode() ? 0 : 3; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
+        for (int i = picksMode() ? 0 : 3; i <= topMaxIndex(); i++) out.add(a11yId(Z_TOP, i));
         for (int i = 0; i < Math.min(Recs.MAX_CARDS, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
         if (continueMode()) for (int i = 0; i < watching.size(); i++) out.add(a11yId(Z_WATCH, i));
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
@@ -3800,7 +5085,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 break;
             }
             case Z_TOP:
-                if (i >= 3 + lightButtons.size()) return false;
+                if (i > topMaxIndex()) return false;
                 a11yRect.set(topRects[i]);
                 dy = (i < 3 ? heroLayer : status).getTranslationY();
                 break;
@@ -3935,7 +5220,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 widgetIndex = i;
                 break;
             case Z_TOP:
-                if (i >= 3 + lightButtons.size() || (i < 3 && !picksMode())) return;
+                if (i > topMaxIndex() || (i < 3 && !picksMode())) return;
                 if (drawerOpen) closeDrawer();
                 topIndex = i;
                 if (i < 3) selectTab(i);
@@ -4039,10 +5324,49 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             snap(topRects[i]);
             x = topRects[i].right + 4 * k;
         }
-        float b = L_BUTTON * k, right = CONTENT_R * k, cy = L_BUTTON_CY * k;
-        for (int i = lightButtons.size() - 1; i >= 0; i--) {
-            topRects[3 + i].set(right - b, cy - b / 2, right, cy + b / 2);
-            right -= b + L_BUTTON_GAP * k;
+        float right = CONTENT_R * k, cy = L_BUTTON_CY * k;
+        updateClock();
+        Paint clockP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        clockP.setTextSize(22 * k);
+        clockP.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        float cw = clockP.measureText(clockText);
+        float netW = network != 0 ? 26 * k : 0;
+        float cogSize = 36 * k;
+        float cogR = right - cw - netW - 16 * k;
+        int remoteIdx = (musicActive && !musicDismissed) ? 9 : 3;
+        int bellIdx = (musicActive && !musicDismissed) ? 10 : 4;
+        int cogIdx = (musicActive && !musicDismissed) ? 11 : 5;
+        topRects[cogIdx].set(cogR - cogSize, cy - cogSize / 2, cogR, cy + cogSize / 2);
+
+        float bellSize = 36 * k;
+        float bellR = cogR - cogSize - 12 * k;
+        topRects[bellIdx].set(bellR - bellSize, cy - bellSize / 2, bellR, cy + bellSize / 2);
+
+        float remoteSize = 36 * k;
+        float remoteR = bellR - bellSize - 12 * k;
+        topRects[remoteIdx].set(remoteR - remoteSize, cy - remoteSize / 2, remoteR, cy + remoteSize / 2);
+
+        if (musicActive && !musicDismissed) {
+            float btnSize = 34 * k;
+            float btnGap = 8 * k;
+            float curR = remoteR - remoteSize - 14 * k;
+            for (int i = 8; i >= 4; i--) {
+                topRects[i].set(curR - btnSize, cy - btnSize / 2, curR, cy + btnSize / 2);
+                curR -= btnSize + (i == 4 ? 14 * k : btnGap);
+            }
+            float thumbSize = 36 * k;
+            String trackText = playing.title != null ? (playing.artist != null ? playing.title + " • " + playing.artist : playing.title) : "Spotify";
+            TextPaint trackP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+            trackP.setTextSize(14 * k);
+            trackP.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            CharSequence ellipText = TextUtils.ellipsize(trackText, trackP, 220 * k, TextUtils.TruncateAt.END);
+            float tw = trackP.measureText(ellipText.toString());
+            float thumbL = curR - tw - 10 * k - thumbSize;
+            topRects[3].set(thumbL, cy - thumbSize / 2, curR, cy + thumbSize / 2);
+        } else {
+            for (int i = 6; i < topRects.length; i++) {
+                topRects[i].setEmpty();
+            }
         }
         float top = L_CARDS_TOP * k, ch = L_CARD_H * k, g = L_CARD_GAP * k, left = MARGIN * k, tall = L_TALL_W * k;
         for (HomeApps.Item it : lightButtons) {
@@ -4555,7 +5879,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         c.restore();
     }
 
-    private void selectTab(int index) {
+    void selectTab(int index) {
         if (index == tab) return;
         tab = index;
         // A tab opens at its first pick, its row at the start: at once, as sliding back would first show the new
@@ -4572,35 +5896,20 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
      * the same photo almost black (or a dark gradient), drawn on top during the transition.
      */
     private void drawLightSky(Canvas c) {
+        c.drawColor(0xFF0E1015);
         long up = SystemClock.uptimeMillis();
         float e = bgFadeAt == 0 ? 1 : fadeEase(bgFadeAt, up);
         boolean fading = bgFadeAt != 0;
-        // Drawer open: the background lightens (by day) or darkens (at night), as a filter on the drawing itself.
-        android.graphics.ColorFilter v = veil(tone(0.32f, 0.42f) * Ui.clamp(drawer.value), blend(0xFFFFFFFF, 0xFF000000, night));
-        if (bgTo == null || (fading && bgFrom == null)) {
-            if (lightGradient == null) lightGradient = Ui.gradient(h, 0xFFF5F5F7, 0xFFE2E2E7);
-            if (nightGradient == null) nightGradient = Ui.gradient(h, 0xFF1C1C1E, 0xFF0B0B0D);
-            fill.setColorFilter(v);
-            fill.setColor(0xFF000000);
-            if (continueMode()) {
-                drawTint(c);
-            } else if (night < 0.999f) {
-                fill.setShader(lightGradient);
-                c.drawRect(screen, fill);
-            }
-            if (night > 0.001f && !continueMode()) {
-                fill.setShader(nightGradient);
-                fill.setAlpha(Math.round(255 * night));
-                c.drawRect(screen, fill);
-                fill.setAlpha(255);
-            }
-            fill.setShader(null);
-            fill.setColorFilter(null);
-        }
-        imagePaint.setColorFilter(v);
         if (fading && bgFrom != null) drawLightImage(c, bgFrom, bgTo == null ? 1 - e : 1);
         if (bgTo != null) drawLightImage(c, bgTo, fading ? e : 1);
-        imagePaint.setColorFilter(null);
+
+        // Dark gradient overlay on bottom and left for clean flat aesthetic
+        Paint gradP = new Paint();
+        gradP.setShader(new LinearGradient(0, 0, 0, h, 0x110E1015, 0xF50E1015, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, w, h, gradP);
+
+        gradP.setShader(new LinearGradient(0, 0, w * 0.6f, 0, 0xEE0E1015, 0x000E1015, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, w, h, gradP);
     }
 
     /** The card's colour as a pale tint by day, a deep one at night, with a fixed shade toward the bottom. */
@@ -4671,48 +5980,42 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (clockMode()) {
             titleRight = 0;
             drawClock(c);
-            if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
             return;
         }
-        String hello = picksMode() ? Ui.tr("For You") : Ui.tr("Continue Watching");
-        c.drawText(hello, MARGIN * k - Ui.leftBearing(lTitle, hello), L_TITLE_BASE * k, lTitle);
-        titleRight = MARGIN * k + lTitle.measureText(hello);
+        titleRight = 0;
         if (!picksMode()) {
             if (continueMode()) drawWatchRow(c);
-            if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
             return;
         }
-        // Text tabs (the selected one in bold, in the main text color); with focus on the tabs, the selected one gets
-        // the white pill with a shadow and grows a little (the tvOS focus).
+        // Text tabs: clean flat underline indicator when active
         float focus = Ui.clamp(topFocus[tab].value);
         for (int i = 0; i < 3; i++) {
             RectF r = topRects[i];
-            if (i == tab && focus > 0.01f) {
-                float s = 1 + 0.05f * focus;
-                cell.set(r.centerX() - r.width() * s / 2, r.centerY() - r.height() * s / 2,
-                        r.centerX() + r.width() * s / 2, r.centerY() + r.height() * s / 2);
-                float rr = cell.height() / 2;
-                if (focus > 0.01f) {
-                    tmp.set(cell);
-                    tmp.offset(0, 8 * k * focus);
-                    shadow.setColor(Ui.alpha(0xFF000000, tone(0.22f, 0.4f) * focus));
-                    shadows.draw(c, tmp, rr, SHADOW_BLUR * k, shadow);
-                }
-                fill.setShader(null);
-                fill.setColor(Ui.alpha(0xFFFFFFFF, focus));
-                c.drawRoundRect(cell, rr, rr, fill);
-            }
             Paint p = i == tab ? lTabOn : lTab;
-            if (i == tab) lTabOn.setColor(blend(tone(L_INK, WHITE), L_INK, focus));   // always dark on the white pill
             c.drawText(tabs()[i], r.centerX() - p.measureText(tabs()[i]) / 2, r.centerY() + Ui.halfCap(p), p);
+            if (i == tab) {
+                // White underline active indicator
+                Paint lineP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                lineP.setColor(0xFFFFFFFF);
+                lineP.setStrokeWidth(3.5f * k);
+                float tw = p.measureText(tabs()[i]);
+                c.drawLine(r.centerX() - tw / 2, r.bottom + 4 * k, r.centerX() + tw / 2, r.bottom + 4 * k, lineP);
+            }
         }
+
+        // Section header for Movie recommendations
+        Paint recsHeaderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        recsHeaderPaint.setColor(0xFFF0F0F0);
+        recsHeaderPaint.setTextSize(22 * k);
+        recsHeaderPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        c.drawText("Filmes em alta", MARGIN * k, L_CARDS_TOP * k - 18 * k, recsHeaderPaint);
+
         layoutCards();
         int top = -1;
-        int slots = cardSlots;   // the others aren't drawn: at 3, no card peeks in at the right edge
+        int slots = cardSlots;
         for (int i = 0; i < slots; i++) if (cardFocus[i].value > 0.02f && (top < 0 || cardFocus[i].value > cardFocus[top].value)) top = i;
         for (int i = 0; i < slots; i++) if (i != top) drawLightCard(c, i);
         if (top >= 0) drawLightCard(c, top);
-        if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
     }
 
     private boolean picksOn() {
@@ -4776,44 +6079,33 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             fill.setColor(tone(0xFFDADADF, 0xFF2C2C2E));
             c.drawRoundRect(cell, r, r, fill);
         }
+        // TOP 10 badge
+        Paint top10Bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        top10Bg.setColor(0xFFE50914);
+        float tw10 = 42 * k, th10 = 20 * k, tx10 = cell.right - tw10 - 10 * k, ty10 = cell.top + 10 * k;
+        c.drawRoundRect(tx10, ty10, tx10 + tw10, ty10 + th10, 4 * k, 4 * k, top10Bg);
+        Paint top10Text = new Paint(Paint.ANTI_ALIAS_FLAG);
+        top10Text.setColor(0xFFFFFFFF);
+        top10Text.setTextSize(11 * k);
+        top10Text.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
+        c.drawText("TOP 10", tx10 + 4 * k, ty10 + 14 * k, top10Text);
+
         if (f > 0.01f) {
-            if (lightSheens.length != cardRects.length) {
-                lightSheens = new LinearGradient[cardRects.length];
-                lightRims = new LinearGradient[cardRects.length];
-            }
-            if (lightSheens[i] == null) {   // in a unit box: the matrix below stretches them to the card as it widens
-                lightSheens[i] = new LinearGradient(-0.5f, -0.5f, 0, 0.5f, 0x38FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP);
-                lightRims[i] = new LinearGradient(0, -0.5f, 0, 0.5f, 0xE6FFFFFF, 0x59FFFFFF, Shader.TileMode.CLAMP);
-            }
-            imageMatrix.setScale(bw, bh);
-            lightSheens[i].setLocalMatrix(imageMatrix);
-            lightRims[i].setLocalMatrix(imageMatrix);
-            int alpha = Math.round(255 * f);
-            c.save();
-            c.translate(cx, cy);
-            c.scale(s, s);
-            tmp.set(-bw / 2, -bh / 2, bw / 2, bh / 2);
-            sheen.setShader(lightSheens[i]);
-            sheen.setAlpha(alpha);
-            c.drawRoundRect(tmp, r0, r0, sheen);
-            sheen.setAlpha(255);
-            rim.setShader(lightRims[i]);
-            rim.setAlpha(alpha);
-            rim.setStrokeWidth(2.5f * k / s);
-            c.drawRoundRect(tmp, r0, r0, rim);
-            rim.setStrokeWidth(2.5f * k);
-            rim.setAlpha(255);
-            c.restore();
+            Paint focusBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
+            focusBorder.setStyle(Paint.Style.STROKE);
+            focusBorder.setStrokeWidth(3.5f * k);
+            focusBorder.setColor(Ui.alpha(0xFFFFFFFF, f));
+            c.drawRoundRect(cell, r, r, focusBorder);
         }
         // The cards peeking in at the sides show only their image: their text would start off screen.
         if (p == null || base.left < 0 || base.left > (CONTENT_R - 100) * k) return;
         fitPaint.set(lCardTitle);
-        c.drawText(TextUtils.ellipsize(p.title, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 46 * k, lCardTitle);
+        c.drawText(TextUtils.ellipsize(p.title, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 36 * k, lCardTitle);
         if (open > 0.02f && p.meta != null && !p.meta.isEmpty()) {
             fitPaint.set(lCardMeta);
             int a = lCardMeta.getAlpha();
             lCardMeta.setAlpha(Math.round(a * open));
-            c.drawText(TextUtils.ellipsize(p.meta, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
+            c.drawText(TextUtils.ellipsize(p.meta, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 64 * k, lCardMeta);
             lCardMeta.setAlpha(a);
         }
         // A narrow card shows only its title: why it's there (Trakt's "Up next: S2 E5") goes under it, fading into the
@@ -4822,64 +6114,690 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             fitPaint.set(lCardMeta);
             int a = lCardMeta.getAlpha();
             lCardMeta.setAlpha(Math.round(a * (1 - open)));
-            c.drawText(TextUtils.ellipsize(p.tag, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
+            c.drawText(TextUtils.ellipsize(p.tag, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 64 * k, lCardMeta);
             lCardMeta.setAlpha(a);
         }
     }
 
-    /**
-     * The round buttons (Live TV, HDMI Inputs and Settings by default): icon-only glass circles (light by day, smoked at
-     * night); the focused one turns white with a dark icon (the tvOS focus) and its name appears below it.
-     */
+    /** Clean flat status at top right (Clock + Network + Cog + Media player) */
     private void drawLightButtons(Canvas c) {
         applyTone();
-        drawStatusIcons(c);
-        for (int slot = 0; slot < lightButtons.size(); slot++) {
-            int i = slot;
-            // The lifted button passes over its neighbors while they exchange places.
-            if (reorderTop && liftIndex >= 0 && liftIndex < lightButtons.size()) {
-                if (slot == lightButtons.size() - 1) i = liftIndex;
-                else if (slot >= liftIndex) i = slot + 1;
-            }
-            HomeApps.Item it = lightButtons.get(i);
-            RectF r = topRects[3 + i];
-            float lift = reorderTop && i == liftIndex ? Math.max(0, moveLift.value) : 0;
-            float dx = topSlide[i].value;
-            boolean transform = dx != 0 || lift > 0.001f;
-            if (transform) {
-                c.save();
-                c.translate(dx, -6 * k * lift);
-                if (lift > 0.001f) c.rotate(wiggle * lift, r.centerX(), r.centerY());
-            }
-            float f = Ui.clamp(topFocus[3 + i].value), s = 1 + 0.1f * f + LIFT_GROW * lift, rad = r.width() / 2 * s;
-            cell.set(r.centerX() - rad, r.centerY() - rad, r.centerX() + rad, r.centerY() + rad);
-            tmp.set(cell);
-            tmp.offset(0, (6 + 8 * f) * k);
-            shadow.setColor(Ui.alpha(0xFF000000, tone(0.1f, 0.3f) + tone(0.14f, 0.2f) * f));
-            shadows.draw(c, tmp, rad, SHADOW_BLUR * k, shadow);
-            scene.liquid(c, cell, rad, tone(glassLight(), SMOKE), tone(0.55f, 0.5f), tone(0.02f, 0.01f), 12 * k, 8 * k,
-                    tone(0.6f, 0.45f), 1 - f);
-            if (f > 0.01f) {
-                fill.setShader(null);
-                fill.setColor(Ui.alpha(0xFFFFFFFF, f));
-                c.drawCircle(cell.centerX(), cell.centerY(), rad, fill);
-            }
-            Symbols.draw(getContext(), c, it.symbol, cell.centerX(), cell.centerY(), 27 * k * s,
-                    blend(tone(L_INK, 0xEBFFFFFF), L_INK, f));
-            if (f > 0.01f) {
-                String label = it.label;
-                float half = lTip.measureText(label) / 2;
-                float x = Math.min(r.centerX(), CONTENT_R * k - half);
-                lTip.setAlpha(Math.round(255 * f));
-                c.drawText(label, x, r.bottom + (40 + 4 * f) * k, lTip);
-            }
-            if (transform) c.restore();
+        updateClock();
+
+        if (musicDismissed) {
+            musicActive = false;
+        } else if (playing.playing) {
+            musicActive = true;
+            musicPlaying = true;
+            lastMusicAt = SystemClock.uptimeMillis();
+        } else if (musicActive && (SystemClock.uptimeMillis() - lastMusicAt < 60_000)) {
+            // Keep active while paused within 60s
+        } else {
+            musicActive = false;
         }
-        if (sleepText.isEmpty()) return;
-        float right = (lightButtons.isEmpty() ? CONTENT_R * k : topRects[3].left) - 28 * k, cy = L_BUTTON_CY * k;
-        float tw = lQuote.measureText(sleepText), size = lQuote.getTextSize();
-        c.drawText(sleepText, right - tw, cy + Ui.halfCap(lQuote), lQuote);
-        Symbols.draw(getContext(), c, "bedtime", right - tw - size * 0.9f, cy, size, lQuote.getColor());
+
+        Paint clockP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        clockP.setColor(0xFFF0F0F0);
+        clockP.setTextSize(22 * k);
+        clockP.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        float cw = clockP.measureText(clockText);
+        float right = CONTENT_R * k;
+        float cy = L_BUTTON_CY * k;
+        c.drawText(clockText, right - cw, cy + 7 * k, clockP);
+
+        float netW = 0;
+        if (network != 0) {
+            float size = 20 * k;
+            String sym = network == 2 ? "ethernet" : "wifi";
+            netW = 26 * k;
+            Symbols.draw(getContext(), c, sym, right - cw - 16 * k, cy, size, 0xFFE0E0E0);
+        }
+
+        float cogSize = 36 * k;
+        float cogR = right - cw - netW - 16 * k;
+        int remoteIdx = (musicActive && !musicDismissed) ? 9 : 3;
+        int bellIdx = (musicActive && !musicDismissed) ? 10 : 4;
+        int cogIdx = (musicActive && !musicDismissed) ? 11 : 5;
+        topRects[cogIdx].set(cogR - cogSize, cy - cogSize / 2, cogR, cy + cogSize / 2);
+        float cf = topFocus[cogIdx].value;
+        if (cf > 0.01f) {
+            Paint focusP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            focusP.setColor(0xFFFFFFFF);
+            focusP.setStyle(Paint.Style.STROKE);
+            focusP.setStrokeWidth(2.5f * k);
+            c.drawCircle(topRects[cogIdx].centerX(), cy, cogSize * 0.48f, focusP);
+        }
+        Symbols.draw(getContext(), c, "settings", topRects[cogIdx].centerX(), cy, 22 * k, cf > 0.01f ? 0xFFFFFFFF : 0xFFCCCCCC);
+
+        // Notification Bell
+        float bellSize = 36 * k;
+        float bellR = cogR - cogSize - 12 * k;
+        topRects[bellIdx].set(bellR - bellSize, cy - bellSize / 2, bellR, cy + bellSize / 2);
+        float bf = topFocus[bellIdx].value;
+        if (bf > 0.01f) {
+            Paint focusP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            focusP.setColor(0xFFFFFFFF);
+            focusP.setStyle(Paint.Style.STROKE);
+            focusP.setStrokeWidth(2.5f * k);
+            c.drawCircle(topRects[bellIdx].centerX(), cy, bellSize * 0.48f, focusP);
+        }
+        drawBellIcon(c, topRects[bellIdx].centerX(), cy, 22 * k, bf > 0.01f ? 0xFFFFFFFF : 0xFFCCCCCC);
+        int notifCount = NowPlaying.notificationCount();
+        if (notifCount > 0) {
+            float dotR = 7 * k;
+            float dotX = topRects[bellIdx].right - 4 * k;
+            float dotY = topRects[bellIdx].top + 5 * k;
+            Paint badgeP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            badgeP.setColor(0xFFFF3B30);
+            c.drawCircle(dotX, dotY, dotR, badgeP);
+            Paint numP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            numP.setColor(0xFFFFFFFF);
+            numP.setTextSize(9 * k);
+            numP.setTextAlign(Paint.Align.CENTER);
+            numP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+            c.drawText(String.valueOf(Math.min(9, notifCount)), dotX, dotY + 3.5f * k, numP);
+        }
+
+        // Remote Control Icon
+        float remoteSize = 36 * k;
+        float remoteR = bellR - bellSize - 12 * k;
+        topRects[remoteIdx].set(remoteR - remoteSize, cy - remoteSize / 2, remoteR, cy + remoteSize / 2);
+        float rf = topFocus[remoteIdx].value;
+        if (rf > 0.01f) {
+            Paint focusP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            focusP.setColor(0xFFFFFFFF);
+            focusP.setStyle(Paint.Style.STROKE);
+            focusP.setStrokeWidth(2.5f * k);
+            c.drawCircle(topRects[remoteIdx].centerX(), cy, remoteSize * 0.48f, focusP);
+        }
+        drawRemoteIcon(c, topRects[remoteIdx].centerX(), cy, 22 * k, rf > 0.01f ? 0xFFFFFFFF : 0xFFCCCCCC);
+
+        if (musicActive && !musicDismissed) {
+            float btnSize = 34 * k;
+            float btnGap = 8 * k;
+            float curR = remoteR - remoteSize - 14 * k;
+
+            // 8: Close, 7: Next, 6: Play/Pause, 5: Prev, 4: Shuffle
+            for (int i = 8; i >= 4; i--) {
+                topRects[i].set(curR - btnSize, cy - btnSize / 2, curR, cy + btnSize / 2);
+                float f = topFocus[i].value;
+                if (f > 0.01f) {
+                    Paint focusP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    focusP.setColor(0xFFFFFFFF);
+                    focusP.setStyle(Paint.Style.STROKE);
+                    focusP.setStrokeWidth(2.5f * k);
+                    c.drawCircle(topRects[i].centerX(), cy, btnSize * 0.48f, focusP);
+                }
+                String sym = (i == 4) ? "shuffle" : (i == 5) ? "skip_previous" : (i == 6) ? (musicPlaying ? "pause" : "play") : (i == 7) ? "skip_next" : "close";
+                float symSize = (i == 8) ? 17 * k : 20 * k;
+                Symbols.draw(getContext(), c, sym, topRects[i].centerX(), cy, symSize, f > 0.01f ? 0xFFFFFFFF : 0xFFCCCCCC);
+                curR -= btnSize + (i == 4 ? 14 * k : btnGap);
+            }
+
+            // 3: Track Thumb & Title
+            float thumbSize = 36 * k;
+            String trackText = playing.title != null ? (playing.artist != null ? playing.title + " • " + playing.artist : playing.title) : "Spotify";
+            TextPaint trackP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+            trackP.setColor(0xFFF0F0F0);
+            trackP.setTextSize(14 * k);
+            trackP.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            CharSequence ellipText = TextUtils.ellipsize(trackText, trackP, 220 * k, TextUtils.TruncateAt.END);
+            float tw = trackP.measureText(ellipText.toString());
+
+            float thumbL = curR - tw - 10 * k - thumbSize;
+            topRects[3].set(thumbL, cy - thumbSize / 2, curR, cy + thumbSize / 2);
+
+            float f3 = topFocus[3].value;
+            if (f3 > 0.01f) {
+                Paint focusP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                focusP.setColor(Ui.alpha(0xFFFFFFFF, f3 * 0.3f));
+                c.drawRoundRect(topRects[3], 8 * k, 8 * k, focusP);
+                focusP.setStyle(Paint.Style.STROKE);
+                focusP.setStrokeWidth(2.5f * k);
+                focusP.setColor(Ui.alpha(0xFFFFFFFF, f3));
+                c.drawRoundRect(topRects[3], 8 * k, 8 * k, focusP);
+            }
+
+            // Draw 1:1 Thumb
+            RectF thumbRect = new RectF(thumbL, cy - thumbSize / 2, thumbL + thumbSize, cy + thumbSize / 2);
+            if (playing.icon != null) {
+                Paint thumbP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                thumbP.setFilterBitmap(true);
+                BitmapShader shader = new BitmapShader(playing.icon, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                Matrix sm = new Matrix();
+                sm.setRectToRect(new RectF(0, 0, playing.icon.getWidth(), playing.icon.getHeight()), thumbRect, Matrix.ScaleToFit.CENTER);
+                shader.setLocalMatrix(sm);
+                thumbP.setShader(shader);
+                c.drawRoundRect(thumbRect, 6 * k, 6 * k, thumbP);
+
+                // Spotify badge on thumb
+                float badgeSize = 13 * k;
+                float bx = thumbRect.right - badgeSize / 2;
+                float by = thumbRect.bottom - badgeSize / 2;
+                Paint bgBadge = new Paint(Paint.ANTI_ALIAS_FLAG);
+                bgBadge.setColor(0xFF121212);
+                c.drawCircle(bx, by, badgeSize * 0.6f, bgBadge);
+                Symbols.draw(getContext(), c, "spotify", bx, by, badgeSize, 0xFF1DB954);
+            } else {
+                Paint thumbBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+                thumbBg.setColor(0xFF1DB954);
+                c.drawRoundRect(thumbRect, 6 * k, 6 * k, thumbBg);
+                Symbols.draw(getContext(), c, "spotify", thumbRect.centerX(), thumbRect.centerY(), 20 * k, 0xFFFFFFFF);
+            }
+
+            // Draw track text
+            c.drawText(ellipText.toString(), thumbL + thumbSize + 10 * k, cy + 5 * k, trackP);
+        }
+    }
+
+    private void drawBellIcon(Canvas c, float cx, float cy, float size, int color) {
+        Bitmap b = Symbols.get(getContext(), "bell");
+        if (b != null) {
+            Symbols.draw(getContext(), c, "bell", cx, cy, size, color);
+            return;
+        }
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(color);
+        p.setStyle(Paint.Style.FILL);
+        float r = size * 0.38f;
+        c.drawCircle(cx, cy - r * 0.2f, r * 0.75f, p);
+        Path path = new Path();
+        path.moveTo(cx - r * 0.95f, cy + r * 0.45f);
+        path.lineTo(cx + r * 0.95f, cy + r * 0.45f);
+        path.lineTo(cx + r * 0.7f, cy - r * 0.2f);
+        path.lineTo(cx - r * 0.7f, cy - r * 0.2f);
+        path.close();
+        c.drawPath(path, p);
+        c.drawRoundRect(new RectF(cx - r * 1.05f, cy + r * 0.38f, cx + r * 1.05f, cy + r * 0.58f), r * 0.1f, r * 0.1f, p);
+        c.drawCircle(cx, cy + r * 0.78f, r * 0.22f, p);
+    }
+
+    private void drawRemoteIcon(Canvas c, float cx, float cy, float size, int color) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(color);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(1.8f * k);
+
+        // Vertical TV remote body
+        float rw = size * 0.44f;
+        float rh = size * 0.94f;
+        RectF body = new RectF(cx - rw / 2, cy - rh / 2, cx + rw / 2, cy + rh / 2);
+        c.drawRoundRect(body, 4.5f * k, 4.5f * k, p);
+
+        // Power dot / IR blaster at top
+        p.setStyle(Paint.Style.FILL);
+        c.drawCircle(cx, cy - rh * 0.32f, 1.6f * k, p);
+
+        // D-pad directional ring in upper middle
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(1.4f * k);
+        c.drawCircle(cx, cy - rh * 0.05f, rw * 0.28f, p);
+
+        // OK center dot
+        p.setStyle(Paint.Style.FILL);
+        c.drawCircle(cx, cy - rh * 0.05f, 1.2f * k, p);
+
+        // Bottom buttons (volume & channel dots)
+        float dotR = 1.3f * k;
+        float row1Y = cy + rh * 0.20f;
+        c.drawCircle(cx - rw * 0.22f, row1Y, dotR, p);
+        c.drawCircle(cx + rw * 0.22f, row1Y, dotR, p);
+
+        float row2Y = cy + rh * 0.34f;
+        c.drawCircle(cx - rw * 0.22f, row2Y, dotR, p);
+        c.drawCircle(cx + rw * 0.22f, row2Y, dotR, p);
+    }
+
+    private static Bitmap qrBitmap(boolean[][] modules) {
+        if (modules == null) return null;
+        int quiet = 3;
+        int mLen = modules.length;
+        int n = mLen + 2 * quiet;
+        int scale = 16;
+        int size = n * scale;
+        int[] pixels = new int[size * size];
+        java.util.Arrays.fill(pixels, 0xFFFFFFFF);
+        for (int my = 0; my < mLen; my++) {
+            for (int mx = 0; mx < mLen; mx++) {
+                if (modules[my][mx]) {
+                    int startY = (my + quiet) * scale;
+                    int startX = (mx + quiet) * scale;
+                    for (int dy = 0; dy < scale; dy++) {
+                        int rowOffset = (startY + dy) * size;
+                        for (int dx = 0; dx < scale; dx++) {
+                            pixels[rowOffset + startX + dx] = 0xFF000000;
+                        }
+                    }
+                }
+            }
+        }
+        return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888);
+    }
+
+    private void drawRemotePointer(Canvas c) {
+        if (!remotePointerVisible || SystemClock.uptimeMillis() - lastRemotePointerAt > 4000) return;
+        float x = remotePointerX, y = remotePointerY;
+        Paint shadowP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        shadowP.setColor(0x66000000);
+        c.drawCircle(x + 2 * k, y + 2 * k, 12 * k, shadowP);
+
+        Paint glowP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        glowP.setColor(0x4D00D2FF);
+        c.drawCircle(x, y, 14 * k, glowP);
+
+        Paint cursorP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cursorP.setColor(0xFF00D2FF);
+        cursorP.setStyle(Paint.Style.FILL);
+        c.drawCircle(x, y, 8 * k, cursorP);
+
+        Paint dotP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dotP.setColor(0xFFFFFFFF);
+        c.drawCircle(x, y, 3.5f * k, dotP);
+    }
+
+    private void drawRemoteModal(Canvas c) {
+        float slide = remoteModalSlide.value;
+        if (!remoteModalOpen && slide < 0.005f) return;
+
+        // Dim full background
+        Paint dimP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dimP.setColor(Ui.alpha(0xFF000000, 0.76f * slide));
+        c.drawRect(0, 0, w, h, dimP);
+
+        // Enlarged modal: 1060 x 600 px (scaled by k)
+        float mw = 1060 * k, mh = 600 * k;
+        float mx = (w - mw) / 2;
+        float my = (h - mh) / 2 + (1f - slide) * 35 * k;
+        remoteModalCardRect.set(mx, my, mx + mw, my + mh);
+
+        // Glass background
+        Paint bgP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bgP.setColor(0xF812141A);
+        c.drawRoundRect(remoteModalCardRect, 24 * k, 24 * k, bgP);
+
+        // Border
+        Paint borderP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        borderP.setStyle(Paint.Style.STROKE);
+        borderP.setStrokeWidth(2.2f * k);
+        borderP.setColor(0x38FFFFFF);
+        c.drawRoundRect(remoteModalCardRect, 24 * k, 24 * k, borderP);
+
+        // Close button [X]
+        float closeR = 24 * k;
+        float closeCx = mx + mw - 32 * k - closeR;
+        float closeCy = my + 30 * k + closeR;
+        remoteModalCloseRect.set(closeCx - closeR, closeCy - closeR, closeCx + closeR, closeCy + closeR);
+
+        Paint closeBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        closeBg.setColor(0x26FFFFFF);
+        c.drawCircle(closeCx, closeCy, closeR, closeBg);
+
+        float xHalf = 7.5f * k;
+        Paint xP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        xP.setColor(0xEEFFFFFF);
+        xP.setStrokeWidth(2.8f * k);
+        xP.setStrokeCap(Paint.Cap.ROUND);
+        c.drawLine(closeCx - xHalf, closeCy - xHalf, closeCx + xHalf, closeCy + xHalf, xP);
+        c.drawLine(closeCx + xHalf, closeCy - xHalf, closeCx - xHalf, closeCy + xHalf, xP);
+
+        // Header Title
+        float curY = my + 50 * k;
+        Paint titleP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        titleP.setColor(0xFFFFFFFF);
+        titleP.setTextSize(32 * k);
+        titleP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        c.drawText("Controle Remoto TV", mx + 42 * k, curY, titleP);
+
+        curY += 34 * k;
+        Paint subP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        subP.setColor(0xB3FFFFFF);
+        subP.setTextSize(19 * k);
+        c.drawText("Aponte a câmera do celular para conectar instantaneamente ao Nexus TV.", mx + 42 * k, curY, subP);
+
+        // Divider
+        curY += 22 * k;
+        Paint divP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        divP.setColor(0x22FFFFFF);
+        divP.setStrokeWidth(1.4f * k);
+        c.drawLine(mx + 42 * k, curY, mx + mw - 42 * k, curY, divP);
+
+        // QR Code area
+        curY += 28 * k;
+        float qrSide = 280 * k;
+        float qrX = mx + 42 * k;
+        RectF qrBox = new RectF(qrX, curY, qrX + qrSide, curY + qrSide);
+
+        // White card behind QR code
+        Paint qrCardP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        qrCardP.setColor(0xFFFFFFFF);
+        c.drawRoundRect(qrBox, 18 * k, 18 * k, qrCardP);
+
+        if (remoteQr != null) {
+            float pad = 14 * k;
+            RectF qrInner = new RectF(qrBox.left + pad, qrBox.top + pad, qrBox.right - pad, qrBox.bottom - pad);
+            Paint qrPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+            qrPaint.setFilterBitmap(true);
+            c.drawBitmap(remoteQr, null, qrInner, qrPaint);
+        }
+
+        // Details on the right of QR code
+        float textX = qrX + qrSide + 42 * k;
+        float rightY = curY + 36 * k;
+
+        Paint labelP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        labelP.setColor(0x88FFFFFF);
+        labelP.setTextSize(17 * k);
+        labelP.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        c.drawText("CONECTAR NO NAVEGADOR:", textX, rightY, labelP);
+
+        rightY += 40 * k;
+        Paint urlP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        urlP.setColor(0xFF00D2FF);
+        urlP.setTextSize(28 * k);
+        urlP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        String shortUrl = remoteUrl != null ? remoteUrl.replaceAll("\\?.*", "") : ("http://...:" + RemoteServer.PORT);
+        c.drawText(shortUrl, textX, rightY, urlP);
+
+        rightY += 52 * k;
+        Paint descP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        descP.setColor(0xDEFFFFFF);
+        descP.setTextSize(20 * k);
+        c.drawText("Escaneie o QR Code ao lado com a câmera do celular.", textX, rightY, descP);
+
+        rightY += 34 * k;
+        Paint autoP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        autoP.setColor(0x99FFFFFF);
+        autoP.setTextSize(18.5f * k);
+        c.drawText("Conexão instantânea • PIN: " + (remotePairCode != null ? remotePairCode : "------"), textX, rightY, autoP);
+
+        // Permanent session badge at bottom
+        float botY = my + mh - 66 * k;
+        RectF infoR = new RectF(mx + 42 * k, botY, mx + mw - 42 * k, botY + 44 * k);
+        Paint infoBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        infoBg.setColor(0x2A22283A);
+        c.drawRoundRect(infoR, 12 * k, 12 * k, infoBg);
+
+        Paint infoTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        infoTxt.setColor(0xAAFFFFFF);
+        infoTxt.setTextSize(16.5f * k);
+        infoTxt.setTextAlign(Paint.Align.CENTER);
+        c.drawText("Sessão permanente • Não expira até você desconectar no celular", infoR.centerX(), infoR.centerY() + 5.5f * k, infoTxt);
+    }
+
+    private static String formatTimeAgo(long postTime) {
+        long diff = System.currentTimeMillis() - postTime;
+        if (diff < 60_000) return "Agora";
+        long mins = diff / 60_000;
+        if (mins < 60) return mins + " min";
+        long hours = mins / 60;
+        if (hours < 24) return hours + " h";
+        return (hours / 24) + " d";
+    }
+
+    private static int appBadgeColor(String pkg) {
+        if (pkg == null) return 0xFF00E5FF;
+        if (pkg.contains("spotify")) return 0xFF1DB954;
+        if (pkg.contains("youtube")) return 0xFFFF4444;
+        if (pkg.contains("unitv")) return 0xFFFF9800;
+        if (pkg.contains("stremio")) return 0xFF7B52AB;
+        return 0xFF00E5FF;
+    }
+
+    private void drawNotifications(Canvas c) {
+        float slide = notifSlide.value;
+        if (!notifOpen && slide < 0.005f) return;
+        float drawerW = 680 * k;
+        float left = w - drawerW * slide, right = w;
+
+        // Dim entire background behind drawer
+        Paint dimP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dimP.setColor(Ui.alpha(0xFF000000, 0.65f * slide));
+        c.drawRect(0, 0, w, h, dimP);
+
+        // Drawer background (deep modern charcoal glass)
+        Paint bgP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bgP.setColor(0xF5141518);
+        c.drawRect(left, 0, right, h, bgP);
+
+        // Left border stroke
+        Paint borderP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        borderP.setColor(0x2EFFFFFF);
+        borderP.setStrokeWidth(1.5f * k);
+        c.drawLine(left, 0, left, h, borderP);
+
+        List<NowPlaying.NotificationItem> list = NowPlaying.activeNotifications;
+        int count = list.size();
+
+        // Header section (scaled up for 720p visual comfort)
+        float headerY = 64 * k;
+
+        // Title "Notificações"
+        Paint titleP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        titleP.setColor(0xFFFFFFFF);
+        titleP.setTextSize(32 * k);
+        titleP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        c.drawText("Notificações", left + 36 * k, headerY, titleP);
+
+        float titleW = titleP.measureText("Notificações");
+
+        // Pill badge with count
+        if (count > 0) {
+            float badgeX = left + 36 * k + titleW + 14 * k;
+            float badgeW = 40 * k, badgeH = 28 * k;
+            RectF badgeR = new RectF(badgeX, headerY - 22 * k, badgeX + badgeW, headerY - 22 * k + badgeH);
+            Paint badgeBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            badgeBg.setColor(0x2600E5FF);
+            c.drawRoundRect(badgeR, 14 * k, 14 * k, badgeBg);
+
+            Paint badgeTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+            badgeTxt.setColor(0xFF00E5FF);
+            badgeTxt.setTextSize(16 * k);
+            badgeTxt.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+            badgeTxt.setTextAlign(Paint.Align.CENTER);
+            c.drawText(String.valueOf(count), badgeR.centerX(), badgeR.centerY() + 5.5f * k, badgeTxt);
+        }
+
+        // Close [X] circular button on top right
+        float closeRadius = 24 * k;
+        float closeCx = right - 36 * k - closeRadius;
+        float closeCy = headerY - 8 * k;
+        notifCloseRect.set(closeCx - closeRadius, closeCy - closeRadius, closeCx + closeRadius, closeCy + closeRadius);
+        boolean closeFocused = (notifIndex == -1);
+
+        Paint closeBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        closeBg.setColor(closeFocused ? 0x4DFFFFFF : 0x1AFFFFFF);
+        c.drawCircle(closeCx, closeCy, closeRadius, closeBg);
+
+        if (closeFocused) {
+            Paint ringP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            ringP.setStyle(Paint.Style.STROKE);
+            ringP.setStrokeWidth(2.8f * k);
+            ringP.setColor(0xFFFFFFFF);
+            c.drawCircle(closeCx, closeCy, closeRadius, ringP);
+        }
+
+        // Draw close "X" inside circle
+        float xHalf = 7.5f * k;
+        Paint xP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        xP.setColor(closeFocused ? 0xFFFFFFFF : 0xCCFFFFFF);
+        xP.setStrokeWidth(2.8f * k);
+        xP.setStrokeCap(Paint.Cap.ROUND);
+        c.drawLine(closeCx - xHalf, closeCy - xHalf, closeCx + xHalf, closeCy + xHalf, xP);
+        c.drawLine(closeCx + xHalf, closeCy - xHalf, closeCx - xHalf, closeCy + xHalf, xP);
+
+        // "Limpar tudo" button (if count > 0)
+        if (count > 0) {
+            float clearW = 140 * k, clearH = 42 * k;
+            float clearR = closeCx - closeRadius - 16 * k;
+            notifClearRect.set(clearR - clearW, closeCy - clearH / 2, clearR, closeCy + clearH / 2);
+            boolean clearFocused = (notifIndex == -2);
+
+            Paint clearBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            clearBg.setColor(clearFocused ? 0x4DFFFFFF : 0x1F2A2C33);
+            c.drawRoundRect(notifClearRect, 21 * k, 21 * k, clearBg);
+
+            if (clearFocused) {
+                Paint ringP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                ringP.setStyle(Paint.Style.STROKE);
+                ringP.setStrokeWidth(2.5f * k);
+                ringP.setColor(0xFFFFFFFF);
+                c.drawRoundRect(notifClearRect, 21 * k, 21 * k, ringP);
+            }
+
+            Paint clearTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+            clearTxt.setColor(clearFocused ? 0xFFFFFFFF : 0xB3FFFFFF);
+            clearTxt.setTextSize(16.5f * k);
+            clearTxt.setTextAlign(Paint.Align.CENTER);
+            clearTxt.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            c.drawText("Limpar tudo", notifClearRect.centerX(), notifClearRect.centerY() + 5.5f * k, clearTxt);
+        } else {
+            notifClearRect.setEmpty();
+        }
+
+        // Divider below header
+        float divY = headerY + 30 * k;
+        Paint divP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        divP.setColor(0x1AFFFFFF);
+        divP.setStrokeWidth(1.5f * k);
+        c.drawLine(left + 36 * k, divY, right - 36 * k, divY, divP);
+
+        notifCardRects.clear();
+
+        // Empty state
+        if (list.isEmpty()) {
+            float midY = h / 2 - 20 * k;
+            Symbols.draw(getContext(), c, "bell", (left + right) / 2, midY - 30 * k, 60 * k, 0x3DFFFFFF);
+
+            Paint emptyTitleP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            emptyTitleP.setColor(0xFFFFFFFF);
+            emptyTitleP.setTextSize(24 * k);
+            emptyTitleP.setTextAlign(Paint.Align.CENTER);
+            emptyTitleP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+            c.drawText("Nenhuma notificação", (left + right) / 2, midY + 22 * k, emptyTitleP);
+
+            Paint emptySubP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            emptySubP.setColor(0x88FFFFFF);
+            emptySubP.setTextSize(17 * k);
+            emptySubP.setTextAlign(Paint.Align.CENTER);
+            c.drawText("Tudo em dia por aqui.", (left + right) / 2, midY + 52 * k, emptySubP);
+
+            // Close button in empty state
+            float btnW = 160 * k, btnH = 48 * k;
+            float btnX = (left + right) / 2 - btnW / 2;
+            float btnY = midY + 84 * k;
+            RectF btnR = new RectF(btnX, btnY, btnX + btnW, btnY + btnH);
+
+            Paint btnBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            btnBg.setColor(closeFocused ? 0x4DFFFFFF : 0x22FFFFFF);
+            c.drawRoundRect(btnR, 24 * k, 24 * k, btnBg);
+
+            if (closeFocused) {
+                Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                fP.setStyle(Paint.Style.STROKE);
+                fP.setStrokeWidth(2.8f * k);
+                fP.setColor(0xFFFFFFFF);
+                c.drawRoundRect(btnR, 24 * k, 24 * k, fP);
+            }
+
+            Paint btnTxt = new Paint(Paint.ANTI_ALIAS_FLAG);
+            btnTxt.setColor(0xFFFFFFFF);
+            btnTxt.setTextSize(18 * k);
+            btnTxt.setTextAlign(Paint.Align.CENTER);
+            btnTxt.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+            c.drawText("Fechar", btnR.centerX(), btnR.centerY() + 6 * k, btnTxt);
+            return;
+        }
+
+        // Notification cards list with larger fonts & app icons
+        float cardY = divY + 20 * k;
+        float cardL = left + 30 * k;
+        float cardW = drawerW - 60 * k;
+        float cardH = 126 * k;
+        float cardGap = 16 * k;
+
+        Paint nTitleP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        nTitleP.setColor(0xFFFFFFFF);
+        nTitleP.setTextSize(21 * k);
+        nTitleP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+
+        Paint nTextP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        nTextP.setColor(0xCCFFFFFF);
+        nTextP.setTextSize(16.5f * k);
+
+        Paint appNameP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        appNameP.setTextSize(14.5f * k);
+        appNameP.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+
+        Paint timeP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        timeP.setColor(0x80FFFFFF);
+        timeP.setTextSize(14f * k);
+        timeP.setTextAlign(Paint.Align.RIGHT);
+
+        TextPaint fitTP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+
+        for (int i = 0; i < Math.min(6, list.size()); i++) {
+            NowPlaying.NotificationItem item = list.get(i);
+            RectF cardR = new RectF(cardL, cardY, cardL + cardW, cardY + cardH);
+            notifCardRects.add(cardR);
+
+            boolean focused = (i == notifIndex);
+
+            // Card background
+            Paint cardBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            cardBg.setColor(focused ? 0x38FFFFFF : 0x1F22242B);
+            c.drawRoundRect(cardR, 16 * k, 16 * k, cardBg);
+
+            if (focused) {
+                Paint fP = new Paint(Paint.ANTI_ALIAS_FLAG);
+                fP.setStyle(Paint.Style.STROKE);
+                fP.setStrokeWidth(2.8f * k);
+                fP.setColor(0xFFFFFFFF);
+                c.drawRoundRect(cardR, 16 * k, 16 * k, fP);
+            }
+
+            // Left icon pill (52x52 px)
+            float iconSize = 52 * k;
+            float iconL = cardR.left + 18 * k;
+            float iconT = cardR.centerY() - iconSize / 2;
+            RectF iconBox = new RectF(iconL, iconT, iconL + iconSize, iconT + iconSize);
+
+            Paint iconBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            iconBg.setColor(0x1F2B303C);
+            c.drawRoundRect(iconBox, 12 * k, 12 * k, iconBg);
+
+            // App icon inside box
+            if (item.pkg != null && item.pkg.contains("spotify")) {
+                Symbols.draw(getContext(), c, "spotify", iconBox.centerX(), iconBox.centerY(), 26 * k, 0xFF1DB954);
+            } else if (item.pkg != null && item.pkg.contains("unitv")) {
+                Symbols.draw(getContext(), c, "play", iconBox.centerX(), iconBox.centerY(), 24 * k, 0xFFFF9800);
+            } else if (item.pkg != null && item.pkg.contains("youtube")) {
+                Symbols.draw(getContext(), c, "play", iconBox.centerX(), iconBox.centerY(), 24 * k, 0xFFFF4444);
+            } else {
+                drawBellIcon(c, iconBox.centerX(), iconBox.centerY(), 24 * k, 0xFF00E5FF);
+            }
+
+            float cx = iconBox.right + 16 * k;
+            float textAvailableW = cardR.right - cx - 18 * k;
+
+            // App name badge
+            appNameP.setColor(appBadgeColor(item.pkg));
+            c.drawText(item.appName.toUpperCase(), cx, cardR.top + 28 * k, appNameP);
+
+            // Relative time on top right
+            c.drawText(formatTimeAgo(item.time), cardR.right - 20 * k, cardR.top + 28 * k, timeP);
+
+            // Notification Title
+            fitTP.set(nTitleP);
+            CharSequence tStr = TextUtils.ellipsize(item.title, fitTP, textAvailableW, TextUtils.TruncateAt.END);
+            c.drawText(tStr.toString(), cx, cardR.top + 62 * k, nTitleP);
+
+            // Notification Text
+            fitTP.set(nTextP);
+            CharSequence descStr = TextUtils.ellipsize(item.text, fitTP, textAvailableW, TextUtils.TruncateAt.END);
+            c.drawText(descStr.toString(), cx, cardR.top + 94 * k, nTextP);
+
+            cardY += cardH + cardGap;
+        }
     }
 
     /** Wi-Fi/Ethernet, Bluetooth (when something is connected) and a USB drive, at the top left. */
@@ -4913,25 +6831,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private boolean moveLight(int dx, int dy) {
         switch (zone) {
             case Z_SHELF:
-                // Up from an empty shelf too: move()'s older zones (the hero, the corner capsule) aren't drawn any more.
-                if (dy >= 0) return false;
-                if (!picksMode()) {
-                    // No tabs or picks: up goes to what you were watching, or to the corner buttons.
-                    if (continueMode() && !watching.isEmpty()) {
-                        zone = Z_WATCH;
-                    } else if (!lightButtons.isEmpty()) {
-                        zone = Z_TOP;
-                        topIndex = 3;
-                    } else {
-                        return true;
-                    }
-                    break;
-                }
-                if (cards.isEmpty()) {
-                    if (!picksOn() && lightButtons.isEmpty()) return true;   // no tabs and no buttons above
+                if (dx != 0) {
+                    int next = Math.max(0, Math.min(shelf.size() - 1, shelfIndex + dx));
+                    if (next == shelfIndex) return true;
+                    shelfIndex = next;
+                    revealShelf(false);
+                } else if (dy < 0) {
                     zone = Z_TOP;
                     topIndex = picksMode() ? tab : 3;
-                } else {
+                } else if (dy > 0) {
+                    if (cards.isEmpty()) return true;
                     zone = Z_CARDS;
                     cardIndex = nearest(cardRects, cards.size(), shelf.isEmpty() ? w / 2f : tileRects[shelfIndex].centerX());
                 }
@@ -4942,11 +6851,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     if (next == cardIndex) return true;
                     cardIndex = next;
                 } else if (dy < 0) {
-                    zone = Z_TOP;
-                    topIndex = tab;     // as on Apple TV: moving up to the tabs focuses the selected tab
-                } else {
                     zone = Z_SHELF;
                     if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, cardRects[cardIndex].centerX());
+                } else if (dy > 0) {
+                    return true;
                 }
                 break;
             case Z_WATCH:
@@ -4955,7 +6863,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     if (next == watchIndex) return true;
                     watchIndex = next;
                 } else if (dy < 0) {
-                    if (lightButtons.isEmpty()) return true;
+                    if (topMaxIndex() < 3) return true;
                     zone = Z_TOP;
                     topIndex = 3;
                 } else {
@@ -4969,18 +6877,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     break;
                 }
                 if (dx != 0) {
-                    int next = Math.max(picksMode() ? 0 : 3, Math.min(2 + lightButtons.size(), topIndex + dx));
+                    int next = Math.max(picksMode() ? 0 : 3, Math.min(topMaxIndex(), topIndex + dx));
                     if (next == topIndex) return true;
                     topIndex = next;
-                    if (topIndex < 3) selectTab(topIndex);   // like Apple TV tabs: focusing a tab selects it
+                    if (topIndex < 3) selectTab(topIndex);   // focusing a tab selects it
                 } else if (dy > 0) {
-                    if (cards.isEmpty()) {
-                        zone = Z_SHELF;
-                    } else {
-                        zone = Z_CARDS;
-                        cardIndex = nearest(cardRects, cards.size(), topRects[topIndex].centerX());
-                    }
-                } else if (topIndex < 3 && !lightButtons.isEmpty()) {
+                    zone = Z_SHELF;
+                    if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, topRects[topIndex].centerX());
+                } else if (topIndex < 3 && topMaxIndex() >= 3) {
                     topIndex = 3;   // up from the tabs reaches the corner buttons without walking the row
                 } else {
                     return true;

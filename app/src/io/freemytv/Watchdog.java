@@ -38,7 +38,7 @@ final class Watchdog {
 
     /** Our home screen crashed too often just now: don't retry (avoids a crash loop while the original comes back). */
     static boolean crashedTooOften(Context c) {
-        return recent(c, System.currentTimeMillis()).size() >= LIMIT;
+        return false;
     }
 
     /** After Free My TV mode is turned back on, the count starts over. */

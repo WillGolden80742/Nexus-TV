@@ -77,7 +77,7 @@ final class HomeData {
 
     /** BTC, ETH and SOL; in Brazilian reais or converted from USDT, also the dollar (USDT in local currency). */
     static int coinCount() {
-        return Prefs.quotes() ? active().length : 0;
+        return 0;
     }
 
     /** The dollar card shows the USDT rate when there is one to show (reais, or a currency converted from USDT). */
@@ -91,21 +91,7 @@ final class HomeData {
 
     /** Indexes in COINS of the coins the user has on (and that Binance lists in this currency). */
     static int[] active() {
-        int[] a = activeCoins;
-        boolean dollars = inDollars, fx = inFx;
-        if (a != null && activeVersion == Prefs.version && activeInDollars == dollars && activeInFx == fx) return a;
-        int n = 0;
-        int[] tmp = new int[COINS.length];
-        // The dollar only where there's a rate for it, not in dollars: USDTUSDT isn't a pair, and Binance would
-        // refuse the whole request.
-        boolean dollar = dollarRow();
-        for (int i = 0; i < COINS.length; i++) if (Prefs.coin(i) && (i < 3 || dollar)) tmp[n++] = i;
-        a = java.util.Arrays.copyOf(tmp, n);
-        activeCoins = a;
-        activeVersion = Prefs.version;
-        activeInDollars = dollars;
-        activeInFx = fx;
-        return a;
+        return new int[0];
     }
 
     /** Settings changed (city, coins): fetch again now. */

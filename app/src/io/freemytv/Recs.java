@@ -53,6 +53,7 @@ final class Recs {
         String title, backdrop, poster, meta = "", app, pkg;   // poster: the portrait image of the narrow cards
         String link;            // opens the title in its app (looked up with Watchmode), or null: the app's home
         String servicePkg;      // open_in_stremio/-_nuvio: the TV's own app it streams on (pkg is then Stremio's or Nuvio's)
+        String imdb;            // IMDb ID (e.g. "tt0460649")
         String tag;             // Trakt: "Up next: S2 E5", "On your watchlist"…, first in the meta; else null
         int mine;               // Trakt: PROGRESS, LIKED (watchlist, recommended) or 0 (TMDB's)
         boolean detailed;
@@ -735,7 +736,20 @@ final class Recs {
         }
         byName = found;
         writeByName(found);
-        if (services.isEmpty()) throw new IOException(any ? NO_APPS : NO_KNOWN_APPS);
+        if (services.isEmpty()) {
+            for (int i = 0; i < providers.length() && i < 20; i++) {
+                JSONObject o = providers.getJSONObject(i);
+                int pId = o.optInt("provider_id");
+                String name = o.optString("provider_name");
+                services.put(pId, new String[] {plain(name), name, STREMIO, name});
+            }
+            if (services.isEmpty()) {
+                services.put(8, new String[] {"netflix", "Netflix", STREMIO, "Netflix"});
+                services.put(119, new String[] {"prime", "Prime Video", STREMIO, "Prime Video"});
+                services.put(337, new String[] {"disney", "Disney+", STREMIO, "Disney+"});
+                services.put(1899, new String[] {"max", "Max", STREMIO, "Max"});
+            }
+        }
         // Signed in to Trakt: what they're in the middle of comes first, then their watchlist and Trakt's
         // recommendations; what they've watched stays out. Trakt failing leaves the picks as they'd be without it.
         // The list keeps the account it was made with (0: none, and always outside :home), so a list the screensaver's
@@ -980,7 +994,7 @@ final class Recs {
     /** Genre, runtime (or seasons) and the service it's on, among the ones the TV has. */
     private void fetchDetails(Pick p) throws Exception {
         JSONObject o = get("/" + p.kind + "/" + p.id
-                + "?language=" + lang() + "&append_to_response=watch/providers,images" + (Config.OPEN_IN_STREMIO ? ",external_ids" : "") + "&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
+                + "?language=" + lang() + "&append_to_response=watch/providers,images,external_ids&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
         p.title = title(p, o);
         String poster = o.optString("poster_path", "");
         if (!poster.isEmpty() && !"null".equals(poster)) p.poster = poster;
@@ -996,34 +1010,20 @@ final class Recs {
         }
         String length = p.kind.equals("movie") ? runtime(o.optInt("runtime")) : seasons(o.optInt("number_of_seasons"));
         if (length != null) parts.add(length);
-        JSONObject wp = o.optJSONObject("watch/providers");
-        JSONObject br = wp == null ? null : wp.optJSONObject("results") == null ? null : wp.optJSONObject("results").optJSONObject(REGION);
-        // A subscription first, then a free service with ads (Pluto TV, Tubi), then a free one: never rent or buy.
-        for (String type : new String[] {"flatrate", "ads", "free"}) {
-            JSONArray list = br == null ? null : br.optJSONArray(type);
-            for (int i = 0; list != null && i < list.length() && p.app == null; i++) {
-                String[] s = service(list.getJSONObject(i).optString("provider_name"), list.getJSONObject(i).optInt("provider_id"));
-                if (s != null && installed(s[2])) {
-                    p.app = s[1];
-                    p.pkg = s[2];
-                }
-            }
-        }
-        if (p.app != null) parts.add(name(p.app));
+        boolean useUniTv = "unitv".equalsIgnoreCase(Prefs.moviePlayer());
+        p.app = useUniTv ? "unitv" : "stremio";
+        p.pkg = useUniTv ? "com.integration.unitvsiptv" : STREMIO;
+        parts.add(useUniTv ? "UniTV" : "Stremio");
         if (p.tag != null) parts.add(0, p.tag);
         JSONObject ext = o.optJSONObject("external_ids");
         String imdb = ext == null ? "" : ext.optString("imdb_id", "");
-        String nuvio = p.app == null ? null : nuvio();
-        if (nuvio != null) {     // the meta still names the TV's app it's on
-            p.servicePkg = p.pkg;   // its switch in Picks from (and the app itself) still decide whether it shows
-            p.app = "nuvio";
-            p.pkg = nuvio;
-            p.link = nuvioLink(p.kind, p.id);
-        } else if (p.app != null && stremio() && imdb.startsWith("tt")) {
-            p.servicePkg = p.pkg;
-            p.app = "stremio";
-            p.pkg = STREMIO;
-            p.link = "stremio:///detail/" + (p.kind.equals("movie") ? "movie" : "series") + "/" + imdb;
+        p.imdb = imdb;
+        if (imdb != null && imdb.startsWith("tt")) {
+            if (p.kind.equals("movie")) {
+                p.link = "stremio:///detail/movie/" + imdb + "/" + imdb + "?autoPlay=true";
+            } else {
+                p.link = "stremio:///detail/series/" + imdb + "?autoPlay=true";
+            }
         }
         p.meta = String.join(" · ", parts);
         p.detailed = true;
@@ -1125,7 +1125,7 @@ final class Recs {
     }
 
     private boolean stremio() {
-        return Config.OPEN_IN_STREMIO && HomeApps.launchIntent(context.getPackageManager(), STREMIO) != null;
+        return HomeApps.launchIntent(context.getPackageManager(), STREMIO) != null;
     }
 
     /** Nuvio's package when open_in_nuvio is on and the app is on the TV: the release APK first, else Google Play's. */

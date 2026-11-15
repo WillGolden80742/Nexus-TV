@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>{{APP_NAME}}</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/css/materialdesignicons.min.css">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header>
+    <div class="logo-area">
+      <div class="brand">{{BRAND_NAME}} <span>{{BRAND_SUFFIX}}</span></div>
+      <div class="status-dot" id="statusDot"></div>
+    </div>
+    <button class="logout-btn" onclick="doLogout()">Desconectar</button>
+  </header>
+
+  <div id="toast">Atualização recebida! Recarregando...</div>
+
+  <div class="content-container">
+    <!-- ABA 1: CONTROLE REMOTO D-PAD -->
+    <div class="tab-page active" id="pageRemote">
+      <div class="top-actions">
+        <button class="action-btn power" data-key="power">
+          <i class="mdi mdi-power"></i>
+        </button>
+        <div style="font-size:12px; font-weight:700; color:#666; letter-spacing:0.5px;">CONTROLE REMOTO</div>
+        <button class="action-btn" data-key="mute">
+          <i class="mdi mdi-volume-mute"></i>
+        </button>
+      </div>
+
+      <div class="nav-shortcuts">
+        <button class="nav-chip" onclick="sendNav('home')">
+          <i class="mdi mdi-home"></i> Início
+        </button>
+        <button class="nav-chip" onclick="sendNav('movies')">
+          <i class="mdi mdi-movie-open"></i> Filmes
+        </button>
+        <button class="nav-chip" onclick="sendNav('series')">
+          <i class="mdi mdi-television-classic"></i> Séries
+        </button>
+        <button class="nav-chip" onclick="sendNav('settings')">
+          <i class="mdi mdi-cog"></i> Ajustes
+        </button>
+      </div>
+
+      <div class="dpad-container">
+        <button class="dpad-btn dpad-up" data-key="up">
+          <i class="mdi mdi-chevron-up"></i>
+        </button>
+        <button class="dpad-btn dpad-down" data-key="down">
+          <i class="mdi mdi-chevron-down"></i>
+        </button>
+        <button class="dpad-btn dpad-left" data-key="left">
+          <i class="mdi mdi-chevron-left"></i>
+        </button>
+        <button class="dpad-btn dpad-right" data-key="right">
+          <i class="mdi mdi-chevron-right"></i>
+        </button>
+        <button class="dpad-center" data-key="enter">OK</button>
+      </div>
+
+      <div class="controls-grid">
+        <button class="ctrl-btn" data-key="back">
+          <i class="mdi mdi-arrow-left"></i>
+          <div>Voltar</div>
+        </button>
+        <button class="ctrl-btn" data-key="home">
+          <i class="mdi mdi-home"></i>
+          <div>Início</div>
+        </button>
+        <button class="ctrl-btn" data-key="menu">
+          <i class="mdi mdi-menu"></i>
+          <div>Menu</div>
+        </button>
+        <button class="ctrl-btn" data-key="vol_down">
+          <i class="mdi mdi-volume-minus"></i>
+          <div>Vol -</div>
+        </button>
+        <button class="ctrl-btn" data-key="play">
+          <i class="mdi mdi-play-pause"></i>
+          <div>Play/Pause</div>
+        </button>
+        <button class="ctrl-btn" data-key="vol_up">
+          <i class="mdi mdi-volume-plus"></i>
+          <div>Vol +</div>
+        </button>
+      </div>
+    </div>
+
+    <!-- ABA 2: TOUCHPAD (GESTOS D-PAD) -->
+    <div class="tab-page" id="pageTouchpad">
+      <div id="touchpad">
+        <div class="touchpad-hint" id="touchpadHint">Deslize para navegar (cima, baixo, esquerda, direita)<br>Toque no centro para confirmar (OK)</div>
+      </div>
+      <div class="touch-actions-row">
+        <button class="click-btn" data-key="enter">Selecionar (OK)</button>
+        <button class="click-btn" data-key="back">Voltar</button>
+      </div>
+    </div>
+
+    <!-- ABA 3: SPOTIFY (FOTOS REAIS DE ÁLBUM + CONTROLE INSTANTÂNEO) -->
+    <div class="tab-page" id="pageSpotify">
+      <div class="spotify-card">
+        <div class="spotify-header-logo">
+          <i class="mdi mdi-spotify" style="font-size:24px; color:#1ED760;"></i>
+          <span>Spotify na TV</span>
+        </div>
+        <div class="spotify-art-wrap">
+          <img id="spotifyArt" class="spotify-art" src="/api/spotify/art" alt="Capa" onerror="this.style.display='none'; document.getElementById('spotifyPlaceholder').style.display='flex';" onload="this.style.display='block'; document.getElementById('spotifyPlaceholder').style.display='none';" />
+          <div id="spotifyPlaceholder" class="spotify-placeholder">
+            <img src="/api/spotify/icon" alt="Spotify Logo" />
+          </div>
+        </div>
+        <div class="spotify-info">
+          <div class="spotify-title" id="spotifyTitle">Nenhuma música tocando</div>
+          <div class="spotify-artist" id="spotifyArtist">Nexus TV Spotify</div>
+        </div>
+        <div class="spotify-progress-wrap" style="width:100%; max-width:320px; margin: 14px auto 6px;">
+          <div class="spotify-progress-bar" style="height:4px; background:#2A2D35; border-radius:2px; overflow:hidden; position:relative;">
+            <div id="spotifyProgressFill" style="height:100%; width:0%; background:#1DB954; border-radius:2px; transition:width 0.3s ease;"></div>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12px; color:#888; margin-top:6px; font-variant-numeric: tabular-nums;">
+            <span id="spotifyCurTime">0:00</span>
+            <span id="spotifyDurTime">0:00</span>
+          </div>
+        </div>
+        <div class="spotify-controls">
+          <button class="sp-btn" onclick="sendSpotify('prev')">
+            <i class="mdi mdi-skip-previous"></i>
+          </button>
+          <button class="sp-btn play-pause" id="spotifyPlayPauseBtn" onclick="sendSpotify('playPause')">
+            <i class="mdi mdi-play" id="spotifyPlayIcon"></i>
+          </button>
+          <button class="sp-btn" onclick="sendSpotify('next')">
+            <i class="mdi mdi-skip-next"></i>
+          </button>
+        </div>
+        <button class="sp-action-btn" onclick="sendSpotify('launch')">
+          <img src="/api/spotify/icon" style="width:18px;height:18px;" alt="" />
+          <span>Abrir Spotify na TV</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ABA 4: NOTIFICAÇÕES -->
+    <div class="tab-page" id="pageNotif">
+      <div class="notif-header">
+        <div class="notif-title">
+          <span>Notificações na TV</span>
+          <span class="notif-badge-pill" id="notifCountPill">0</span>
+        </div>
+        <div class="notif-actions">
+          <button class="notif-btn" onclick="sendNav('notif')">Abrir na TV</button>
+          <button class="notif-btn" onclick="sendClearNotifications()">Limpar</button>
+        </div>
+      </div>
+      <div class="notif-list" id="notifList">
+        <div style="color:#888; text-align:center; padding:30px;">Nenhuma notificação na TV</div>
+      </div>
+    </div>
+
+    <!-- ABA 5: APPS FAVORITOS -->
+    <div class="tab-page" id="pageApps">
+      <div class="apps-header">Apps Favoritos do Nexus Launcher</div>
+      <div class="apps-grid" id="appsList">
+        <div style="color:#888; text-align:center; grid-column:1/-1; padding:20px;">Carregando favoritos...</div>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <button class="tab-btn active" onclick="selectTab('remote', this)">
+      <div class="tab-icon-wrap"><i class="mdi mdi-remote"></i></div>
+      <div>Controle</div>
+    </button>
+    <button class="tab-btn" onclick="selectTab('touchpad', this)">
+      <div class="tab-icon-wrap"><i class="mdi mdi-mouse"></i></div>
+      <div>Touchpad</div>
+    </button>
+    <button class="tab-btn spotify-tab" onclick="selectTab('spotify', this)">
+      <div class="tab-icon-wrap"><i class="mdi mdi-spotify"></i></div>
+      <div>Spotify</div>
+    </button>
+    <button class="tab-btn" onclick="selectTab('notif', this)">
+      <div class="tab-icon-wrap"><i class="mdi mdi-bell"></i></div>
+      <span class="tab-nav-badge" id="tabNotifBadge">0</span>
+      <div>Notif</div>
+    </button>
+    <button class="tab-btn" onclick="selectTab('apps', this)">
+      <div class="tab-icon-wrap"><i class="mdi mdi-apps"></i></div>
+      <div>Apps</div>
+    </button>
+  </nav>
+
+  <!-- MODAL DE EMPARELHAMENTO -->
+  <div id="pairingModal">
+    <div class="pair-box">
+      <i class="mdi mdi-television mdi-lg" style="color:#00D2FF"></i>
+      <div class="pair-title">Conectar ao {{BRAND_NAME}} {{BRAND_SUFFIX}}</div>
+      <div class="pair-desc" id="pairingStatus">Aponte a câmera do celular para o QR Code na TV para conectar instantaneamente.</div>
+    </div>
+  </div>
+
+  <script src="/js/app.js" defer></script>
+</body>
+</html>

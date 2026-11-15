@@ -291,7 +291,7 @@ public class SettingsActivity extends Activity {
             phone = HomeMode.phone(a);
             scene.applyPalette();
             setFocusable(true);
-            setContentDescription("Free My TV");
+            setContentDescription("Nexus TV");
             installed = Updates.installedVersion(a);
             // TalkBack: one item per row, id = row + 1.
             spoken = new Spoken(this, new Spoken.Source() {
@@ -328,7 +328,7 @@ public class SettingsActivity extends Activity {
                     if (row == 0) {
                         String busyText = busyText();
                         String value = busy() ? (busyText.isEmpty() ? Ui.tr("Starting…") : busyText)
-                                : freeActive() ? "Free My TV" : Ui.tr("Original");
+                                : freeActive() ? "Nexus TV" : Ui.tr("Original");
                         return Ui.trf("Home Screen, {mode}", "mode", value);
                     }
                     String[] names = {Ui.tr("Screensaver, preview"), Ui.tr("Home Settings"),
@@ -337,7 +337,7 @@ public class SettingsActivity extends Activity {
                     return row - 1 < names.length ? names[row - 1] : "";
                 }
                 case HOME_CHOICE: {
-                    String name = row == 0 ? "Free My TV, " + (Capabilities.screensaver(getContext())
+                    String name = row == 0 ? "Nexus TV, " + (Capabilities.screensaver(getContext())
                             ? Ui.tr("no ads, with the new screensaver") : Ui.tr("no ads"))
                             : "Original, " + Ui.tr("the TV's factory home screen");
                     boolean inUse = (row == 0) == freeActive();
@@ -582,7 +582,7 @@ public class SettingsActivity extends Activity {
             // On the left: big symbol, title, description.
             float cx = 500 * k;
             Symbols.draw(getContext(), c, "sparkles", cx, 400 * k, 150 * k, 0xEBFFFFFF);
-            c.drawText("Free My TV", cx, 612 * k, title);
+            c.drawText("Nexus TV", cx, 612 * k, title);
             c.drawText(Ui.tr("Your TV's home screen and screensaver"), cx, 660 * k, subtitle);
             c.drawText(versionName(getContext()), cx, 704 * k, version);
 
@@ -596,7 +596,7 @@ public class SettingsActivity extends Activity {
         private void drawMain(Canvas c, float seconds) {
             boolean working = busy();
             String busyText = busyText();
-            String mode = freeActive() ? "Free My TV" : Ui.tr("Original");
+            String mode = freeActive() ? "Nexus TV" : Ui.tr("Original");
             String[] labels = {Ui.tr("Home Screen"), Ui.tr("Screensaver"),
                     Ui.tr("Home Settings"), Ui.tr("Shelf"), Ui.tr("Top Buttons"), Ui.tr("Inputs"),
                     Ui.tr("Remote Buttons"), Ui.tr("Sleep Timer"), Ui.tr("TV Settings")};
@@ -713,7 +713,7 @@ public class SettingsActivity extends Activity {
             }
             cellValue.setColor(0x73FFFFFF);
             c.drawText(Ui.tr("Original"), colA, y, cellValue);
-            c.drawText("Free My TV", colB, y, cellValue);
+            c.drawText("Nexus TV", colB, y, cellValue);
             cellValue.setColor(0xD9FFFFFF);
             // The mode just switched to: its memory comes two minutes later, so its cells wait with "…", not "—".
             boolean soon = !busy() && memorySoon();
@@ -750,7 +750,7 @@ public class SettingsActivity extends Activity {
             Paint heading = Ui.text(Ui.displaySemibold, 34 * k, 0xFFFFFFFF);
             c.drawText(Ui.tr("Home Screen"), LIST_X * k + 30 * k, (LIST_TOP - 24) * k, heading);
             String free = Capabilities.screensaver(getContext()) ? Ui.tr("No ads, with the new screensaver") : Ui.tr("No ads");
-            String[][] options = {{"Free My TV", free},
+            String[][] options = {{"Nexus TV", free},
                     {Ui.tr("Original"), Ui.tr("The TV's factory home screen")}};
             int current = freeActive() ? 0 : 1;
             for (int i = 0; i < 2; i++) {
@@ -796,9 +796,9 @@ public class SettingsActivity extends Activity {
 
         private static String versionName(Context c) {
             try {
-                return "Free My TV " + c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+                return "Nexus TV " + c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
             } catch (android.content.pm.PackageManager.NameNotFoundException e) {
-                return "Free My TV";
+                return "Nexus TV";
             }
         }
 
@@ -1054,20 +1054,22 @@ public class SettingsActivity extends Activity {
         }
 
         private String[] picksLabels() {
-            return Trakt.available() ? new String[] {Ui.tr("Picks per tab"), Ui.tr("Picks from"), Ui.tr("Cartoons and anime"), "Trakt"}
-                    : new String[] {Ui.tr("Picks per tab"), Ui.tr("Picks from"), Ui.tr("Cartoons and anime")};
+            String player = "Abrir filmes em";
+            return Trakt.available() ? new String[] {player, Ui.tr("Picks per tab"), Ui.tr("Picks from"), Ui.tr("Cartoons and anime"), "Trakt"}
+                    : new String[] {player, Ui.tr("Picks per tab"), Ui.tr("Picks from"), Ui.tr("Cartoons and anime")};
         }
 
         private String[] picksValues() {
+            String playerVal = "unitv".equalsIgnoreCase(Prefs.moviePlayer()) ? "UniTV" : "Stremio";
             String from = someServicesOff ? Ui.tr("services|Some") : Ui.tr("services|All");
             String animation = onOff(!Prefs.hideAnimation());
-            return Trakt.available() ? new String[] {String.valueOf(Prefs.cards()), from, animation, traktValue()}
-                    : new String[] {String.valueOf(Prefs.cards()), from, animation};
+            return Trakt.available() ? new String[] {playerVal, String.valueOf(Prefs.cards()), from, animation, traktValue()}
+                    : new String[] {playerVal, String.valueOf(Prefs.cards()), from, animation};
         }
 
         /** The Trakt row on the Picks screen (the last one), only with a Trakt API app in config.properties; else -1. */
         private static int traktRow() {
-            return Trakt.available() ? 3 : -1;
+            return Trakt.available() ? 4 : -1;
         }
 
         private String traktValue() {
@@ -1412,7 +1414,7 @@ public class SettingsActivity extends Activity {
             // can onn's buttons.
             if (RemoteKeys.XIAOMI || RemoteKeys.XIAOMI_AFKR0 || RemoteKeys.ONN) {
                 appPkgs.add(HomeMode.PKG);
-                appLabels.add("Free My TV");
+                appLabels.add("Nexus TV");
             }
             if (RemoteKeys.HISENSE || RemoteKeys.GOOGLE_STREAMER || RemoteKeys.ONN || RemoteKeys.PHILIPS_GTV) {
                 appPkgs.add(Prefs.ALL_APPS);
@@ -1431,9 +1433,11 @@ public class SettingsActivity extends Activity {
             if (unavailable(focus) != null && !turnOff) return;
             if (screen == PICKS) {
                 if (focus == 0) {
+                    Prefs.setMoviePlayer("unitv".equalsIgnoreCase(Prefs.moviePlayer()) ? "stremio" : "unitv");
+                } else if (focus == 1) {
                     int n = Prefs.cards() - 3, span = Recs.MAX_CARDS - 3 + 1;
                     Prefs.setCards(3 + (n + dir + span) % span);
-                } else if (focus == 2) {
+                } else if (focus == 3) {
                     Prefs.setHideAnimation(!Prefs.hideAnimation());
                 }
                 return;
@@ -2551,7 +2555,7 @@ public class SettingsActivity extends Activity {
                 screen = PICKS;
                 pickScroll = 0;   // this list is short: it draws from row 0
                 focus = 0;
-            } else if (screen == PICKS && focus == 1) {
+            } else if (screen == PICKS && focus == 2) {
                 services.clear();
                 services.addAll(Recs.installedServices(c));
                 screen = PICK_FROM;

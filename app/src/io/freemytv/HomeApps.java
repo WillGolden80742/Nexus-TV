@@ -95,8 +95,16 @@ final class HomeApps {
      * art's colors as they are. Last, a visual size tweak for the logo. Edit freely.
      */
     private static final String[][] SHELF = {
+        {"netflix", "Netflix", "com.netflix.mediaclient", "E50914", "", "1"},
         {"netflix", "Netflix", "com.netflix.ninja", "E50914", "", "1"},
+        {"stremio", "Stremio", "com.stremio.one", "583594", "", "1"},
+        {"unitv", "UniTV", "com.integration.unitvsiptv", "E65100", "", "1"},
+        {"soltv", "Sol TV", "com.bx.soltv", "0288D1", "", "1"},
+        {"veloplay", "VeloPlay TV", "com.global.veloplaytv", "2E7D32", "", "1"},
         {"youtube", "YouTube", "com.google.android.youtube.tv", "FF0033", "play", "1"},
+        {"youtube", "SmartTube", "org.smarttube.stable", "FF0033", "play", "1"},
+        {"spotify", "Spotify", "com.spotify.tv.android", "1DB954", "", "1"},
+        {"aptoide", "Aptoide TV", "cm.aptoide.pt", "F4511E", "", "1"},
         {"youtube", "YouTube", "com.amazon.firetv.youtube", "FF0033", "play", "1"},
         {"prime", "Prime Video", "com.amazon.amazonvideo.livingroom", "1A98FF", "tint", "0.96"},
         {"prime", "Prime Video", "com.amazon.firebat", "1A98FF", "tint", "0.96"},
@@ -139,7 +147,7 @@ final class HomeApps {
     }
 
     static int maxShelf(Context c) {
-        return lowRam(c) ? FEW_APPS : Integer.MAX_VALUE;
+        return Integer.MAX_VALUE;
     }
 
     /** An app All Apps leaves out (the TV's own helpers: Safety Guard, T-Solo…): Recent Apps leaves it out too. */
@@ -152,6 +160,8 @@ final class HomeApps {
             "com.smartdevice.livetv", "com.mediatek.tv.oneworld.tvcenter", "com.amazon.tv.livetv", "com.amazon.mediatek.livetv"};
     /** Kept out of "All Apps" (only hidden, still installed). Add the ones your TV shows that you never use. */
     private static final Set<String> HIDDEN = new HashSet<>(java.util.Arrays.asList(
+            "com.alphainventor.filemanager",        // File Manager
+            "com.yablio.sendfilestotv",             // Send Files to TV
             "com.google.android.play.games",        // Google Play Games
             "com.tcl.t_solo",                       // TCL: T-Solo
             "com.tcl.waterfall.overseas",           // TCL Channel
@@ -199,7 +209,9 @@ final class HomeApps {
                 // An app picked in Settings > Shelf that isn't in SHELF: its own name and TV art.
                 it.key = pkg;
                 it.label = ri != null ? String.valueOf(ri.loadLabel(pm)) : pkg;
-                it.setTile(appTile(c, null, pkg, 0));
+                it.logo = shelfLogo(c, pkg, pkg, "", extract);
+                if (it.logo == null) it.setTile(appTile(c, null, pkg, 0));
+                if (it.logo != null) it.logoInk = ink(it.logo);
             } else {
                 it.key = d[0];
                 it.label = d[1];
@@ -227,9 +239,14 @@ final class HomeApps {
         Set<String> keys = new HashSet<>();
         PackageManager pm = c.getPackageManager();
         for (String[] d : SHELF) {
-            if (out.size() < FEW_APPS && !keys.contains(d[0]) && launchIntent(pm, d[2]) != null) {
+            if (!keys.contains(d[0]) && launchIntent(pm, d[2]) != null) {
                 keys.add(d[0]);
                 out.add(d[2]);
+            }
+        }
+        for (String[] app : launchable(c)) {
+            if (!out.contains(app[0]) && !app[0].equals(c.getPackageName()) && !HIDDEN.contains(app[0])) {
+                out.add(app[0]);
             }
         }
         return out;
@@ -265,7 +282,7 @@ final class HomeApps {
     static final List<String> TOP_DEFAULT = Collections.unmodifiableList(java.util.Arrays.asList(TOP_LIVE, TOP_INPUTS, TOP_SETTINGS));
     /** What can be a top button: the default three, and Recent Apps and App Store for whoever adds them. */
     static final List<String> TOP_ALL = Collections.unmodifiableList(java.util.Arrays.asList(TOP_LIVE, TOP_INPUTS, TOP_SETTINGS, TOP_RECENTS, TOP_STORE));
-    static final int MAX_TOP = TOP_ALL.size();
+    static final int MAX_TOP = 12;
 
     /** The keys of the top buttons, in order (Settings > Top Buttons; by default Live TV, HDMI Inputs, Settings). */
     static List<String> topButtonKeys() {
@@ -279,24 +296,9 @@ final class HomeApps {
         return keys;
     }
 
-    /** The top buttons, ready to draw. A null context skips the store until the background app load checks it. */
+    /** The top buttons, ready to draw. Removed per user request. */
     static List<Item> topButtons(Context c) {
-        List<Item> items = new ArrayList<>();
-        for (String key : topButtonKeys()) {
-            Item item = topButton(key);
-            Item box = TOP_LIVE.equals(key) && c != null ? liveButtonInput(c) : null;
-            if (box != null) {   // Home Settings > Live TV button: an HDMI input, under its own name
-                item = action(INPUT, TOP_LIVE, box.label, "live_tv");
-                item.inputId = box.inputId;
-                item.number = box.number;
-            }
-            if (TOP_STORE.equals(key)) {
-                item.pkg = c == null ? null : storePackage(c);
-                if (item.pkg == null) continue;   // keep the saved choice, but no dead button on the home screen
-            }
-            items.add(item);
-        }
-        return items;
+        return Collections.emptyList();
     }
 
     /** Home Settings > Live TV button: the input it opens instead of Live TV, while the TV still lists it; else null. */
@@ -678,6 +680,16 @@ final class HomeApps {
                     if ("com.netflix.ninja".equals(it.pkg) && plain != null && plain.getComponent() != null) {
                         intent.setComponent(plain.getComponent()).putExtra("source", "30").addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
                     }
+                    if ("com.stremio.one".equals(it.pkg)) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    }
+                }
+                if (a instanceof Activity) {
+                    try {
+                        android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager) a.getSystemService(Context.INPUT_METHOD_SERVICE);
+                        View f = ((Activity) a).getCurrentFocus();
+                        if (imm != null && f != null) imm.hideSoftInputFromWindow(f.getWindowToken(), 0);
+                    } catch (Exception ignored) {}
                 }
                 break;
             case LIVE_TV:
@@ -1253,18 +1265,45 @@ final class HomeApps {
         } catch (PackageManager.NameNotFoundException ignored) {
         }
         if (icon == null) return darkTile(TILE_W, TILE_H);
-        boolean adaptive = icon instanceof AdaptiveIconDrawable;
+        boolean adaptive = Build.VERSION.SDK_INT >= 26 && AdaptiveHelper.isAdaptive(icon);
         // Drawn at the icon's own resolution (the whole tile, so the squircle's edge is smooth too), then filtered down.
-        float drawn = TILE_H * (adaptive ? 0.56f * 1.5f : 0.46f);
+        float drawn = TILE_H * (adaptive ? 0.56f * 1.5f : 0.76f);
         float k = detail(icon, drawn, drawn);
         int tw = Math.round(TILE_W * k), th = Math.round(TILE_H * k);
         Bitmap b = darkTile(tw, th);
         Canvas canvas = new Canvas(b);
-        int size = Math.round(th * 0.56f);
+        int size = Math.round(th * 0.65f);
         float left = (tw - size) / 2f, top = (th - size) / 2f;
         if (adaptive) {
-            // Adaptive icon: the layers in a squircle, like an Apple icon. Drawn apart, then filling an anti-aliased
-            // rounded rectangle (clipPath leaves stair-stepped corners).
+            AdaptiveHelper.draw(icon, size, left, top, canvas);
+        } else {
+            // Legacy icon: scale to fill ~76% height, keeping aspect ratio
+            int intrinsicW = icon.getIntrinsicWidth(), intrinsicH = icon.getIntrinsicHeight();
+            int sw, sh;
+            if (intrinsicW > 0 && intrinsicH > 0) {
+                float aspect = (float) intrinsicW / intrinsicH;
+                sh = Math.round(th * 0.76f);
+                sw = Math.round(sh * aspect);
+                if (sw > Math.round(tw * 0.85f)) {
+                    sw = Math.round(tw * 0.85f);
+                    sh = Math.round(sw / aspect);
+                }
+            } else {
+                sw = sh = Math.round(th * 0.76f);
+            }
+            int l = (tw - sw) / 2, t = (th - sh) / 2;
+            icon.setBounds(l, t, l + sw, t + sh);
+            icon.draw(canvas);
+        }
+        return shrink(b, TILE_W, TILE_H);
+    }
+
+    private static final class AdaptiveHelper {
+        static boolean isAdaptive(Drawable icon) {
+            return icon instanceof AdaptiveIconDrawable;
+        }
+
+        static void draw(Drawable icon, int size, float left, float top, Canvas canvas) {
             AdaptiveIconDrawable a = (AdaptiveIconDrawable) icon;
             Bitmap layers = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
             Canvas lc = new Canvas(layers);
@@ -1282,13 +1321,7 @@ final class HomeApps {
             Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
             p.setShader(shader);
             canvas.drawRoundRect(x, y, x + size, y + size, size * 0.2237f, size * 0.2237f, p);
-        } else {
-            // Legacy icon (a free-form drawing with transparency): smaller, no frame.
-            int s = Math.round(th * 0.46f);
-            icon.setBounds((tw - s) / 2, (th - s) / 2, (tw + s) / 2, (th + s) / 2);
-            icon.draw(canvas);
         }
-        return shrink(b, TILE_W, TILE_H);
     }
 
     /**

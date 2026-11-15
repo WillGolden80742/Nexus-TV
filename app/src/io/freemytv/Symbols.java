@@ -45,9 +45,13 @@ final class Symbols {
                     b = b.extractAlpha();
                     b.setHasMipMap(true);
                 }
-            } catch (IOException ignored) {
+            } catch (Throwable t) {
+                android.util.Log.e("Symbols", "Error loading symbol: " + name, t);
             }
             CACHE.put(name, b);
+            if (b == null) {
+                android.util.Log.w("Symbols", "Symbol loaded as null: " + name);
+            }
             return b;
         }
     }

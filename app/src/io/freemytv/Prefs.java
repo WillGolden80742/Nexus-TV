@@ -9,6 +9,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -232,6 +233,133 @@ final class Prefs {
 
     static void setHideAnimation(boolean hide) { put("hideAnimation", hide); }
 
+    /** "stremio" or "unitv". Default is "stremio". */
+    static String moviePlayer() {
+        return sp().getString("moviePlayer", "stremio");
+    }
+
+    static void setMoviePlayer(String p) {
+        put("moviePlayer", "stremio".equalsIgnoreCase(p) ? "stremio" : "unitv");
+    }
+
+    static Set<String> pairedRemoteTokens() {
+        Set<String> set = new HashSet<>();
+        try {
+            Context ctx = context();
+            if (ctx != null) {
+                File f = new File(ctx.getFilesDir(), "paired_tokens.txt");
+                if (f.exists()) {
+                    try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            line = line.trim();
+                            if (!line.isEmpty()) set.add(line);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            Set<String> spSet = sp().getStringSet("paired_remote_tokens", null);
+            if (spSet != null) set.addAll(spSet);
+        } catch (Throwable ignored) {}
+        return set;
+    }
+
+    static void addPairedRemoteToken(String token) {
+        if (token == null || token.isEmpty()) return;
+        token = token.trim();
+        Set<String> set = new HashSet<>(pairedRemoteTokens());
+        set.add(token);
+        try {
+            Context ctx = context();
+            if (ctx != null) {
+                File f = new File(ctx.getFilesDir(), "paired_tokens.txt");
+                try (FileWriter fw = new FileWriter(f, true)) {
+                    fw.write(token + "\n");
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            sp().edit().putStringSet("paired_remote_tokens", set).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    static void removePairedRemoteToken(String token) {
+        if (token == null || token.isEmpty()) return;
+        token = token.trim();
+        Set<String> set = new HashSet<>(pairedRemoteTokens());
+        set.remove(token);
+        try {
+            Context ctx = context();
+            if (ctx != null) {
+                File f = new File(ctx.getFilesDir(), "paired_tokens.txt");
+                try (FileWriter fw = new FileWriter(f, false)) {
+                    for (String t : set) fw.write(t + "\n");
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            sp().edit().putStringSet("paired_remote_tokens", set).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    static boolean isRemoteTokenAuthorized(String token) {
+        if (token == null || token.isEmpty()) return false;
+        return pairedRemoteTokens().contains(token.trim());
+    }
+
+    static void saveRecentPairToken(String token) {
+        if (token == null || token.isEmpty()) return;
+        token = token.trim();
+        long now = System.currentTimeMillis();
+        try {
+            Context ctx = context();
+            if (ctx != null) {
+                File f = new File(ctx.getFilesDir(), "active_pair_token.txt");
+                try (FileWriter fw = new FileWriter(f, false)) {
+                    fw.write(token + ":" + now + "\n");
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            sp().edit().putString("active_pair_token", token.toUpperCase(Locale.ROOT))
+                       .putLong("active_pair_time", now).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    static boolean isValidRecentPairToken(String token) {
+        if (token == null || token.isEmpty()) return false;
+        token = token.trim();
+        try {
+            Context ctx = context();
+            if (ctx != null) {
+                File f = new File(ctx.getFilesDir(), "active_pair_token.txt");
+                if (f.exists()) {
+                    try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+                        String line = br.readLine();
+                        if (line != null && line.contains(":")) {
+                            String[] parts = line.split(":", 2);
+                            String saved = parts[0].trim();
+                            long time = Long.parseLong(parts[1].trim());
+                            if (System.currentTimeMillis() - time <= 30 * 60_000L && saved.equalsIgnoreCase(token)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            String saved = sp().getString("active_pair_token", null);
+            long time = sp().getLong("active_pair_time", 0);
+            if (saved != null && (System.currentTimeMillis() - time <= 30 * 60_000L)) {
+                return saved.equalsIgnoreCase(token);
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
     // MARK: - Picks from
 
     private static String offList;
@@ -369,7 +497,7 @@ final class Prefs {
     static String forecast() { return "days".equals(sp().getString("forecast", "hours")) ? "days" : "hours"; }
     static void setForecast(String v) { put("forecast", v); }
 
-    static boolean nowPlaying() { return sp().getBoolean("nowPlaying", false); }
+    static boolean nowPlaying() { return sp().getBoolean("nowPlaying", true); }
     static void setNowPlaying(boolean on) {   // committed: the main process reads it right away to allow the listener
         sp().edit().putBoolean("nowPlaying", on).commit();
         version++;
@@ -379,7 +507,7 @@ final class Prefs {
     static boolean homeAssistant() { return sp().getBoolean("homeAssistant", false); }
     static void setHomeAssistant(boolean on) { put("homeAssistant", on); }
 
-    static boolean quotes() { return sp().getBoolean("quotes", Config.SHOW_CRYPTO); }
+    static boolean quotes() { return false; }
     static void setQuotes(boolean on) { put("quotes", on); }
 
     /** Your photos (Photos, sent from a computer) on the screensaver and behind the home screen, once imported. */

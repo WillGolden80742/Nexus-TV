@@ -1,0 +1,16 @@
+# Nexus Virtual Input key layout
+key 28    ENTER
+key 232   DPAD_CENTER
+key 108   DPAD_DOWN
+key 103   DPAD_UP
+key 105   DPAD_LEFT
+key 106   DPAD_RIGHT
+key 158   BACK
+key 102   HOME
+key 172   HOME
+key 139   MENU
+key 115   VOLUME_UP
+key 114   VOLUME_DOWN
+key 113   VOLUME_MUTE
+key 116   POWER
+key 164   MEDIA_PLAY_PAUSE

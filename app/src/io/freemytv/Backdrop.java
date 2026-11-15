@@ -238,10 +238,19 @@ final class Backdrop {
 
     /** Copies it to GPU memory (cheap to draw; the process doesn't keep the pixels). */
     static Bitmap gpu(Bitmap b) {
-        Bitmap g = b.copy(Bitmap.Config.HARDWARE, false);
-        if (g == null) return b;
-        b.recycle();
-        return g;
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            return GpuHelper.copy(b);
+        }
+        return b;
+    }
+
+    private static final class GpuHelper {
+        static Bitmap copy(Bitmap b) {
+            Bitmap g = b.copy(Bitmap.Config.HARDWARE, false);
+            if (g == null) return b;
+            b.recycle();
+            return g;
+        }
     }
 
     /** Blends with a near-black (the darkest gray of Apple's dark-mode backgrounds), keeping the photo's tint. */

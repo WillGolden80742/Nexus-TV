@@ -1,7 +1,10 @@
 package io.freemytv;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -52,6 +55,11 @@ public class HomeActivity extends Activity {
         home = new HomeView(this);
         setContentView(home);
         getWindow().setBackgroundDrawable(null);
+        RemoteServer.start(this);
+        try {
+            registerReceiver(actionReceiver, new IntentFilter("io.freemytv.ACTION"));
+        } catch (Throwable ignored) {}
+        handleActionIntent(getIntent());
         if (wantsAllApps(getIntent())) home.showAllApps();
         else if (getIntent().getBooleanExtra(EXTRA_INPUTS, false)) home.showInputs();
         // At power-on "Live TV" (#346): the first time the home screen comes up after a full start, in Free My TV mode.
@@ -91,6 +99,7 @@ public class HomeActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        RemoteServer.setActiveHome(this, home);
         resumed = true;
         // TCL's Android 11 records the home activity as translucent (occludesParent=false) whatever its theme says:
         // Android then keeps the app just left visible, and home tasks are layered under all others, so that app stays
@@ -112,6 +121,7 @@ public class HomeActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        RemoteServer.clearActiveHome(this);
         resumed = false;
         if (liveWaits) {   // the screen going off, not another screen coming to the front
             PowerManager power = getSystemService(PowerManager.class);
@@ -129,6 +139,8 @@ public class HomeActivity extends Activity {
             AppLog.w("at power-on: Home came first, no Live TV");
         }
         if (home == null) return;
+        if (handleActionIntent(intent)) return;
+        home.closeAllModals();
         if (wantsAllApps(intent)) {
             home.showAllApps();
             return;
@@ -149,12 +161,63 @@ public class HomeActivity extends Activity {
     private static final long TWICE_MS = 700;
 
     @Override protected void onDestroy() {
+        try { unregisterReceiver(actionReceiver); } catch (Throwable ignored) {}
         if (home != null) {
             home.removeCallbacks(powerOnLive);
             home.destroy();
         }
         super.onDestroy();
     }
+
+    private boolean handleActionIntent(Intent intent) {
+        if (intent == null) return false;
+        if (intent.hasExtra("action")) {
+            String act = intent.getStringExtra("action");
+            if ("openNotif".equals(act)) {
+                if (home != null) home.openNotif();
+                return true;
+            }
+            if ("toggleNotif".equals(act)) {
+                if (home != null) home.toggleNotif();
+                return true;
+            }
+            if ("openRemoteModal".equals(act)) {
+                if (home != null) home.toggleRemoteModal();
+                return true;
+            }
+            if ("openMusic".equals(act)) {
+                if (home != null) home.openMusicModal();
+                return true;
+            }
+            if ("openSettings".equals(act)) {
+                if (home != null) home.openAndroidSettings();
+                return true;
+            }
+            if ("selectTab".equals(act)) {
+                int tab = intent.getIntExtra("tab", 0);
+                if (home != null) home.selectTab(tab);
+                return true;
+            }
+            if ("sendKey".equals(act)) {
+                if (!hasWindowFocus()) return true;
+                int code = intent.getIntExtra("keyCode", 0);
+                if (code > 0 && home != null) {
+                    KeyEvent down = new KeyEvent(KeyEvent.ACTION_DOWN, code);
+                    KeyEvent up = new KeyEvent(KeyEvent.ACTION_UP, code);
+                    home.onKey(down);
+                    home.onKey(up);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private final BroadcastReceiver actionReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            handleActionIntent(intent);
+        }
+    };
 
     @Override public void onTrimMemory(int level) {
         super.onTrimMemory(level);
@@ -173,6 +236,9 @@ public class HomeActivity extends Activity {
             liveWaits = liveDark = false;
             AppLog.w("at power-on: a key came first (" + KeyEvent.keyCodeToString(event.getKeyCode())
                     + (event.getAction() == KeyEvent.ACTION_UP ? " up" : "") + "), no Live TV");
+        }
+        if (event.getKeyCode() == KeyEvent.KEYCODE_HOME && home != null) {
+            home.closeAllModals();
         }
         if (RemoteKeys.onKey(this, event)) return true;
         // The Apps key, unless it has a row in Remote Buttons on this TV (Hisense): there the row decides, and on

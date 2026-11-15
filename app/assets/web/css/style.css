@@ -1,0 +1,774 @@
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  outline: none;
+}
+
+body {
+  background: #0B0C0E;
+  color: #F5F5F7;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mdi {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  text-align: center;
+  width: auto;
+  height: auto;
+}
+.mdi-sm { font-size: 16px; }
+.mdi-lg { font-size: 48px; }
+.dpad-btn i.mdi { font-size: 30px; }
+.ctrl-btn i.mdi { font-size: 20px; margin-bottom: 2px; }
+.sp-btn i.mdi { font-size: 24px; }
+.sp-btn.play-pause i.mdi { font-size: 32px; color: #000; }
+.nav-chip i.mdi { font-size: 16px; }
+.tab-btn .tab-icon-wrap i.mdi { font-size: 22px; }
+
+header {
+  height: 52px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #121418;
+  z-index: 10;
+}
+
+.logo-area { display: flex; align-items: center; gap: 8px; }
+.brand { font-size: 16px; font-weight: 800; color: #FFF; letter-spacing: 0.6px; }
+.brand span { color: #00D2FF; }
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #30D158;
+  box-shadow: 0 0 8px #30D158;
+  transition: all 0.2s ease;
+}
+.status-dot.connecting {
+  background: #FF9F0A;
+  box-shadow: 0 0 8px #FF9F0A;
+}
+
+
+.logout-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 0;
+  color: #AAA;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.logout-btn:active {
+  background: rgba(255, 59, 48, 0.3);
+  color: #FF3B30;
+}
+
+#toast {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  background: #00D2FF;
+  color: #000;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  z-index: 9999;
+  box-shadow: 0 4px 15px rgba(0, 210, 255, 0.4);
+  transition: all 0.25s ease;
+  pointer-events: none;
+  opacity: 0;
+}
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.content-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.tab-page {
+  display: none;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  padding: 10px 14px;
+  overflow-y: auto;
+}
+.tab-page.active {
+  display: flex;
+}
+
+/* D-PAD REMOTE TAB */
+.top-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.action-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 0;
+  background: #1C1F26;
+  color: #FFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: transform 0.05s, background 0.05s;
+  cursor: pointer;
+}
+.action-btn:active {
+  transform: scale(0.92);
+  background: #2A2E38;
+}
+.action-btn.power {
+  background: rgba(200, 16, 46, 0.18);
+  color: #FF453A;
+  border: 1px solid rgba(255, 69, 58, 0.3);
+}
+
+/* QUICK SHORTCUTS ROW */
+.nav-shortcuts {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 10px 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.nav-chip {
+  flex: 1;
+  min-width: 56px;
+  height: 38px;
+  background: #161820;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: #FFF;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.1s;
+  white-space: nowrap;
+}
+.nav-chip:active {
+  transform: scale(0.93);
+  background: #00D2FF;
+  color: #000;
+}
+.nav-chip svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+/* DPAD */
+.dpad-container {
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: #171A21;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 4px auto;
+  position: relative;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), inset 0 2px 4px rgba(255, 255, 255, 0.05);
+}
+.dpad-btn {
+  position: absolute;
+  background: transparent;
+  border: 0;
+  color: #FFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.05s;
+  cursor: pointer;
+}
+.dpad-btn:active {
+  background: rgba(0, 210, 255, 0.15);
+}
+.dpad-up {
+  top: 0;
+  left: 55px;
+  width: 90px;
+  height: 60px;
+  border-top-left-radius: 90px;
+  border-top-right-radius: 90px;
+}
+.dpad-down {
+  bottom: 0;
+  left: 55px;
+  width: 90px;
+  height: 60px;
+  border-bottom-left-radius: 90px;
+  border-bottom-right-radius: 90px;
+}
+.dpad-left {
+  top: 55px;
+  left: 0;
+  width: 60px;
+  height: 90px;
+  border-top-left-radius: 90px;
+  border-bottom-left-radius: 90px;
+}
+.dpad-right {
+  top: 55px;
+  right: 0;
+  width: 60px;
+  height: 90px;
+  border-top-right-radius: 90px;
+  border-bottom-right-radius: 90px;
+}
+.dpad-center {
+  position: absolute;
+  top: 60px;
+  left: 60px;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: #232733;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  color: #00D2FF;
+  font-weight: 700;
+  font-size: 15px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+.dpad-center:active {
+  transform: scale(0.93);
+  background: #00D2FF;
+  color: #000;
+}
+
+/* BOTTOM CONTROLS (VOLUME / HOME / BACK) */
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+  width: 100%;
+}
+.ctrl-btn {
+  height: 48px;
+  border-radius: 14px;
+  background: #181B22;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #FFF;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.05s, background 0.05s;
+}
+.ctrl-btn:active {
+  transform: scale(0.94);
+  background: #242935;
+  color: #00D2FF;
+}
+
+/* TOUCHPAD & GESTURE NAVIGATION */
+.touch-mode-selector {
+  display: flex;
+  gap: 6px;
+  background: #161820;
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.touch-mode-btn {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #888;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+.touch-mode-btn.active {
+  background: #00D2FF;
+  color: #000;
+}
+#touchpad {
+  flex: 1;
+  width: 100%;
+  min-height: 220px;
+  background: #14161D;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.touchpad-hint {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+  text-align: center;
+  line-height: 1.6;
+  padding: 0 16px;
+}
+.touch-actions-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.click-btn {
+  flex: 1;
+  height: 46px;
+  border-radius: 14px;
+  background: #1C2029;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #FFF;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.click-btn:active {
+  background: #00D2FF;
+  color: #000;
+}
+
+/* SPOTIFY TAB (ENHANCED WITH AMBIENT GLOW AND REAL ALBUM ART) */
+.spotify-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 330px;
+  margin: auto;
+  padding: 8px;
+  position: relative;
+}
+.spotify-header-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.spotify-header-logo svg {
+  width: 26px;
+  height: 26px;
+}
+.spotify-header-logo span {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1DB954;
+  letter-spacing: 0.5px;
+}
+.spotify-art-wrap {
+  width: 210px;
+  height: 210px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #161820;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7), 0 0 25px rgba(30, 215, 96, 0.15);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.spotify-art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 19px;
+  transition: opacity 0.25s ease;
+}
+.spotify-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #14161D;
+}
+.spotify-placeholder img {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+}
+.spotify-info {
+  text-align: center;
+  margin-bottom: 18px;
+  width: 100%;
+  padding: 0 10px;
+}
+.spotify-title {
+  font-size: 19px;
+  font-weight: 800;
+  color: #FFF;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+  transition: opacity 0.2s ease;
+}
+.spotify-artist {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1ED760;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+.spotify-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 18px;
+  width: 100%;
+}
+.sp-btn {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #1C1F26;
+  color: #FFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.08s, background 0.1s;
+}
+.sp-btn:active {
+  transform: scale(0.9);
+  background: #2A2E38;
+}
+.sp-btn.play-pause {
+  width: 64px;
+  height: 64px;
+  background: #1ED760;
+  border: 0;
+  color: #000;
+  box-shadow: 0 6px 22px rgba(30, 215, 96, 0.45);
+}
+.sp-btn.play-pause:active {
+  transform: scale(0.92);
+  background: #18AF4E;
+}
+.sp-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(30, 215, 96, 0.12);
+  border: 1px solid rgba(30, 215, 96, 0.3);
+  color: #1ED760;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 22px;
+  border-radius: 22px;
+  cursor: pointer;
+  transition: transform 0.08s, background 0.15s;
+}
+.sp-action-btn:active {
+  transform: scale(0.95);
+  background: rgba(30, 215, 96, 0.25);
+}
+
+/* NOTIFICATIONS TAB */
+.notif-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.notif-title {
+  font-size: 17px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notif-badge-pill {
+  background: #00D2FF;
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+.notif-actions { display: flex; gap: 8px; }
+.notif-btn {
+  background: #1C1F26;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #AAA;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.notif-btn:active {
+  background: #2A2E38;
+  color: #FFF;
+}
+.notif-list { display: flex; flex-direction: column; gap: 8px; }
+.notif-card {
+  background: #161820;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  gap: 10px;
+  position: relative;
+}
+.notif-card-body { flex: 1; min-width: 0; }
+.notif-app-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: #00D2FF;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+.notif-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #FFF;
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notif-item-text {
+  font-size: 12px;
+  color: #888;
+  line-height: 1.4;
+}
+.notif-dismiss-btn {
+  border: 0;
+  background: transparent;
+  color: #666;
+  font-size: 16px;
+  padding: 4px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.notif-dismiss-btn:active { color: #FF453A; }
+
+/* APPS TAB */
+.apps-header {
+  font-size: 14px;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+}
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 2px 0;
+}
+.app-card {
+  background: #161820;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 12px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform 0.08s, background 0.1s;
+}
+.app-card:active {
+  transform: scale(0.94);
+  background: #222632;
+}
+.app-icon-wrap {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #20232C;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+}
+.app-icon-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 14px;
+}
+.app-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #E5E5EA;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+/* BOTTOM NAVIGATION (CLEAN SINGLE INDICATOR BAR) */
+nav {
+  height: 58px;
+  background: #121418;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  z-index: 10;
+}
+.tab-btn {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: transparent;
+  border: 0;
+  color: #777;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s ease;
+}
+.tab-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.tab-btn.active { color: #00D2FF; }
+.tab-btn.active svg { fill: #00D2FF; }
+.tab-btn.active.spotify-tab { color: #1ED760; }
+
+/* Single clean active line on the bottom */
+.tab-btn::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 3px;
+  background: transparent;
+  border-radius: 3px 3px 0 0;
+  transition: width 0.2s ease, background 0.2s ease;
+}
+.tab-btn.active::after {
+  width: 28px;
+  background: #00D2FF;
+  box-shadow: 0 -1px 8px rgba(0, 210, 255, 0.7);
+}
+.tab-btn.active.spotify-tab::after {
+  background: #1ED760;
+  box-shadow: 0 -1px 8px rgba(30, 215, 96, 0.7);
+}
+.tab-nav-badge {
+  position: absolute;
+  top: 6px;
+  right: 20%;
+  background: #FF3B30;
+  color: #FFF;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 1px 5px;
+  min-width: 14px;
+  text-align: center;
+  display: none;
+}
+
+/* PAIRING MODAL */
+#pairingModal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.pair-box {
+  background: #171A21;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  padding: 28px 24px;
+  width: 100%;
+  max-width: 320px;
+  text-align: center;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+}
+.pair-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #FFF;
+  margin-top: 16px;
+}
+.pair-desc {
+  font-size: 14px;
+  color: #888;
+  margin-top: 8px;
+  line-height: 1.5;
+}
