@@ -373,7 +373,11 @@ public final class RemoteServer {
                 target = new File("/data/local/tmp/nexus_mouse");
             }
             try {
-                if (!target.exists() || target.length() == 0) {
+                long assetLen = 0;
+                try (android.content.res.AssetFileDescriptor afd = appContext.getAssets().openFd("nexus_mouse")) {
+                    assetLen = afd.getLength();
+                } catch (Throwable ignored) {}
+                if (!target.exists() || target.length() == 0 || (assetLen > 0 && target.length() != assetLen)) {
                     try (InputStream in = appContext.getAssets().open("nexus_mouse");
                          FileOutputStream out = new FileOutputStream(target)) {
                         byte[] buf = new byte[4096];
@@ -413,7 +417,8 @@ public final class RemoteServer {
     public static void ensureSystemOptimizations() {
         POOL.execute(() -> {
             try {
-                String cmd = "if ! grep -q zram0 /proc/swaps 2>/dev/null; then "
+                String cmd = "echo 1 > /sys/module/rockchip_pwm_remotectl/parameters/code_print 2>/dev/null; "
+                           + "if ! grep -q zram0 /proc/swaps 2>/dev/null; then "
                            + "  echo 1 > /sys/devices/virtual/block/zram0/reset 2>/dev/null; "
                            + "  echo lzo > /sys/devices/virtual/block/zram0/comp_algorithm 2>/dev/null; "
                            + "  echo 402653184 > /sys/devices/virtual/block/zram0/disksize 2>/dev/null; "
